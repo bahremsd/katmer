@@ -1,1 +1,0 @@
-auto grad calcualtion in layers of thin films
