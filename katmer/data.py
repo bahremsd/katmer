@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pandas as pd
 from typing import Union, List, Tuple, Optional, Callable
+import warnings
 
 @lru_cache(maxsize=32)
 def load_nk_data(material_name: str = '') -> Union[jnp.ndarray, None]:
@@ -117,6 +118,13 @@ def add_material_to_nk_database(wavelength_arr, refractive_index_arr, extinction
     # Validate material name
     if not material_name.strip():
         raise ValueError("Material name cannot be an empty string")
+
+    # Check for extinction coefficients greater than 20
+    if jnp.any(extinction_coeff_arr > 20):
+        warnings.warn("Extinction coefficient being greater than 20 indicates that the material is almost opaque. "
+                      "In the Transfer Matrix Method, to avoid the coefficients going to 0 and the gradient being zero, "
+                      "extinction coefficients greater than 20 have been thresholded to 20.", UserWarning)
+        extinction_coeff_arr = jnp.where(extinction_coeff_arr > 20, 20, extinction_coeff_arr)
 
     # Ensure the data is on the correct device
     wavelength_arr, refractive_index_arr, extinction_coeff_arr = map(device_put, [wavelength_arr, refractive_index_arr, extinction_coeff_arr])

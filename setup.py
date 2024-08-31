@@ -1,4 +1,4 @@
-"""Python setup.py for project_name package"""
+"""Python setup.py for katmer package"""
 import io
 import os
 from setuptools import find_packages, setup
@@ -6,7 +6,7 @@ from setuptools import find_packages, setup
 
 def read(*paths, **kwargs):
     """Read the contents of a text file safely.
-    >>> read("project_name", "VERSION")
+    >>> read("katmer", "VERSION")
     '0.1.0'
     >>> read("README.md")
     ...
@@ -30,13 +30,13 @@ def read_requirements(path):
 
 
 setup(
-    name="project_name",
-    version=read("project_name", "VERSION"),
+    name="katmer",
+    version=read("katmer", "VERSION"),
     description="project_description",
-    url="https://github.com/author_name/project_urlname/",
+    url="https://github.com/bahremsd/katmer/",
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
-    author="author_name",
+    author="bahremsd",
     packages=find_packages(exclude=["tests", ".github"]),
     install_requires=read_requirements("requirements.txt"),
     entry_points={

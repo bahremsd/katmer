@@ -1,4 +1,4 @@
-name: Rename the project from template
+name: katmer
 
 on: [push]
 

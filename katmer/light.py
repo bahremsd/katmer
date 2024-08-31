@@ -1,6 +1,8 @@
 import jax.numpy as jnp
+from jax import vmap
+import numpy as np
 import sys
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union, Tuple, Dict, Callable, List
 
 # Define EPSILON as the smallest representable positive number such that 1.0 + EPSILON != 1.0
 EPSILON = sys.float_info.epsilon
@@ -92,6 +94,44 @@ class Light:
         """
         return self._polarization
 
+    def save_log(self, wavelength_file: str, angle_file: str, polarization_file: str):
+        """
+        Save wavelength, angle of incidence, and polarization data to CSV files.
+
+        Parameters:
+        - wavelength_file: str
+            Path to the file (without extension) where wavelength data will be saved.
+        - angle_file: str
+            Path to the file (without extension) where angle of incidence data will be saved.
+        - polarization_file: str
+            Path to the file (without extension) where polarization state will be saved.
+        """
+        # Append .csv to filenames
+        wavelength_file = wavelength_file + '.csv'
+        angle_file = angle_file + '.csv'
+        polarization_file = polarization_file + '.csv'
+        
+        # Convert wavelength to numpy array and save to CSV
+        np.savetxt(wavelength_file, self._wavelength, header='wavelength', delimiter=',', comments='')
+
+        # Convert angle of incidence to numpy array and save to CSV
+        np.savetxt(angle_file, self._angle_of_incidence, header='angle_of_incidence', delimiter=',', comments='')
+
+        # Handle polarization data
+        if self._polarization is not None:
+            # Convert boolean to string ('s' or 'p')
+            polarization_value = 'p' if self._polarization else 's'
+        else:
+            # Set value to "unpolarized"
+            polarization_value = 'unpolarized'
+        
+        # Save polarization data to CSV
+        with open(polarization_file, 'w') as file:
+            file.write('polarization\n')  # Write header
+            file.write(f'{polarization_value}\n')  # Write data
+
+
+
 def is_propagating_wave(n: Union[float, jnp.ndarray], theta: Union[float, jnp.ndarray], polarization: Optional[bool] = None) -> Union[bool, Tuple[bool, bool]]:
     """
     Determines whether the wave is propagating forward through the stack based on the angle, 
@@ -147,12 +187,13 @@ def is_propagating_wave(n: Union[float, jnp.ndarray], theta: Union[float, jnp.nd
         return bool(is_forward_p)
 
 
-def compute_layer_angles(n_list: jnp.ndarray, initial_theta: Union[float, jnp.ndarray]) -> jnp.ndarray:
+def _compute_layer_angles_one_wl(nk_list: jnp.ndarray, initial_theta: Union[float, jnp.ndarray]) -> jnp.ndarray:
     """
-    Computes the angle of incidence for light in each layer of a multilayer thin film using Snell's law.
+    Computes the angle of incidence for light in each layer of a multilayer thin film using Snell's law 
+    (just for 1 wl and init theta nk value).
 
     Args:
-        n_list (Array): A one-dimensional JAX array representing the complex refractive indices 
+        nk_list (Array): A one-dimensional JAX array representing the complex refractive indices 
                         of the materials in each layer of the multilayer thin film. Each element 
                         is of the form `n + j*k`, where `n` is the refractive index, and `k` 
                         is the extinction coefficient, which accounts for the absorption in the material.
@@ -182,21 +223,64 @@ def compute_layer_angles(n_list: jnp.ndarray, initial_theta: Union[float, jnp.nd
             - theta_0 is the initial angle of incidence,
             - n_i is the refractive index of the ith layer.    
     """
-    # Ensure that the initial angle input is treated as a one-dimensional array.
-    # This is crucial for consistent processing of both single and batch angle inputs.
-    initial_theta = jnp.atleast_1d(initial_theta)
-    
     # Calculate the sine of the angles in the first layer using Snell's law
-    sin_theta = jnp.sin(initial_theta) * n_list[0] / n_list
-    
+    sin_theta = jnp.sin(initial_theta) * nk_list[0] / nk_list
     # Compute the angle (theta) in each layer using the arcsin function
     # jnp.arcsin is preferred for compatibility with complex values if needed
     theta_array = jnp.arcsin(sin_theta)
     # If the angle is not forward-facing, we subtract it from pi to flip the orientation.
-    if not is_propagating_wave(n_list[0], theta_array[0]):
+    if not is_propagating_wave(nk_list[0], theta_array[0]):
         theta_array = theta_array.at[0].set(jnp.pi - theta_array[0])
-    if not is_propagating_wave(n_list[-1], theta_array[-1]):
+    if not is_propagating_wave(nk_list[-1], theta_array[-1]):
         theta_array = theta_array.at[-1].set(jnp.pi - theta_array[-1])
         
-    # If only one initial theta is provided, return a 1D array; otherwise, return a 2D array
-    return theta_array if initial_theta.ndim > 1 else theta_array.squeeze(axis=0)
+    # Return a 1D theta array for each layer
+    return theta_array
+
+def compute_layer_angles(nk_functions: Dict[int, Callable], 
+                         material_distribution: List[int], 
+                         initial_theta: Union[float, jnp.ndarray], 
+                         wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
+    """
+    Calculates the angles of incidence across layers for a set of refractive indices (nk_list_2d) 
+    and an initial angle of incidence (initial_theta) using vectorization.
+
+    Args:
+        nk_functions (Dict[int, Callable]): A dictionary where each key corresponds to an index 
+                                            in the material_distribution, and each value is a function 
+                                            that takes wavelength as input and returns the complex 
+                                            refractive index for that material.
+        material_distribution (List[int]): A list that describes the distribution of materials across 
+                                           the layers. Each element is an index to the nk_functions dictionary.
+        initial_theta (Union[float, jnp.ndarray]): The initial angle of incidence (in radians). Can be 
+                                                  a single float or a 1D/2D jax array (ndarray) depending 
+                                                  on the use case.
+        wavelength (Union[float, jnp.ndarray]): The wavelength or an array of wavelengths (ndarray) 
+                                               for which the computation will be performed.
+
+    Returns:
+        jnp.ndarray: A 3D JAX array where the [i, j, :] entry represents the angles of incidence 
+                     for the j-th initial angle at the i-th wavelength. The size of the third dimension 
+                     corresponds to the number of layers.
+    """
+    
+    # Create a function that retrieves the refractive indices for each material in the distribution
+    def get_nk_values(wl):
+        # For each material in the distribution, call the corresponding nk function with the given wavelength
+        return jnp.array([nk_functions[mat_idx](wl) for mat_idx in material_distribution])
+
+    # Use vmap to vectorize the get_nk_values function over the wavelength dimension
+    # This will return a 2D array where each row corresponds to the refractive indices at a given wavelength
+    nk_list_2d = vmap(get_nk_values)(wavelength)
+
+    # Vectorize the _compute_layer_angles_one_wl function over the wavelength dimension (first dimension of nk_list_2d)
+    # in_axes=(0, None, 0) means:
+    # - The first argument (nk_list_2d) will not be vectorized
+    # - The second argument (initial_theta) will be vectorized over the first dimension
+    vmap_compute_layer_angles = vmap(_compute_layer_angles_one_wl, in_axes=(None, 0))
+
+    # Apply the vectorized function to get the 3D array of angles
+    # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
+    return vmap_compute_layer_angles(nk_list_2d, initial_theta)
+
+

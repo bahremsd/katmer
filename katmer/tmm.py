@@ -5,9 +5,92 @@ from jax import vmap, jit
 from stacks import Stack
 from light import Light
 
+def _fresnel_s(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
+               _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Compute the Fresnel reflection and transmission coefficients for s-polarized light.
+
+    This function calculates the reflection and transmission coefficients for s-polarized light, where
+    the electric field is perpendicular to the plane of incidence. The coefficients are computed based
+    on the Fresnel equations, which describe the behavior of electromagnetic waves at the interface between
+    two media with different refractive indices (n&k).
+
+    Parameters:
+    - _first_layer_n (Union[float, jnp.ndarray]): The refractive index of the first medium. This can be
+      either a scalar or an array, allowing for flexible and vectorized operations.
+    - _second_layer_n (Union[float, jnp.ndarray]): The refractive index of the second medium. This can
+      also be a scalar or an array, consistent with the first layer's refractive index.
+    - _first_layer_theta (Union[float, jnp.ndarray]): The angle of incidence in the first medium, provided
+      as either a scalar or an array.
+    - _second_layer_theta (Union[float, jnp.ndarray]): The angle of refraction in the second medium, given
+      as either a scalar or an array.
+
+    Returns:
+    - Tuple[jnp.ndarray, jnp.ndarray]: A tuple containing:
+        - _r_s (jnp.ndarray): The Fresnel reflection coefficient for s-polarized light, representing the ratio
+          of the reflected electric field amplitude to the incident electric field amplitude.
+        - _t_s (jnp.ndarray): The Fresnel transmission coefficient for s-polarized light, representing the ratio
+          of the transmitted electric field amplitude to the incident electric field amplitude.
+
+    The reflection coefficient (_r_s) and transmission coefficient (_t_s) are computed using the following
+    Fresnel equations:
+    
+    - Reflection coefficient (_r_s):
+      _r_s = (n_i cos \theta_i - n_i+1 cos \theta_i+1) / (n_i cos \theta_i + n_i+1 cos \theta_i+1)
+    
+    - Transmission coefficient (_t_s):
+      _t_s = ( 2 * n_i cos \theta_i) / (n_i cos \theta_i + n_i+1 cos \theta_i+1)
+    
+    """
+    _r_s = ((_first_layer_n * jnp.cos(_first_layer_theta) - _second_layer_n * jnp.cos(_second_layer_theta)) /
+            (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
+    _t_s = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
+            (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
+    return _r_s, _t_s
+
+def _fresnel_p(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
+               _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    This function computes the reflection and transmission coefficients for light polarized with the
+    electric field parallel to the plane of incidence (p-polarization). The coefficients are derived
+    from the Fresnel equations, which describe the interaction of electromagnetic waves with an interface
+    between two media with different refractive indices (n&k).
+
+    Parameters:
+    - _first_layer_n (Union[float, jnp.ndarray]): The refractive index of the first medium. This parameter
+      can be a single scalar value or a JAX array, allowing for operations on multiple values simultaneously.
+    - _second_layer_n (Union[float, jnp.ndarray]): The refractive index of the second medium, provided as
+      either a scalar or an array.
+    - _first_layer_theta (Union[float, jnp.ndarray]): The angle of incidence in the first medium. Can be
+      a scalar or an array of angles.
+    - _second_layer_theta (Union[float, jnp.ndarray]): The angle of refraction in the second medium. This
+      can also be provided as a scalar or an array.
+
+    Returns:
+    - Tuple[jnp.ndarray, jnp.ndarray]: A tuple containing:
+      - _r_p (jnp.ndarray): The Fresnel reflection coefficient for p-polarized light. This coefficient
+        represents the fraction of the incident light that is reflected at the interface between the two
+        media.
+      - _t_p (jnp.ndarray): The Fresnel transmission coefficient for p-polarized light. This coefficient
+        represents the fraction of the incident light that is transmitted through the interface.
+
+    The reflection (_r_p) and transmission (_t_p) coefficients are computed using the following equations:
+    - Reflection coefficient (_r_p):
+      _r_p = (n_i+1 cos \theta_i - n_i cos \theta_i+1) / (n_i+1 cos \theta_i + n_i cos \theta_i+1)
+      
+    - Transmission coefficient (_t_p):
+      _t_p = ( 2 * n_i cos \theta_i) / (n_i+1 cos \theta_i + n_i cos \theta_i+1)
+      
+    """
+    _r_p = ((_second_layer_n * jnp.cos(_first_layer_theta) - _first_layer_n * jnp.cos(_second_layer_theta)) /
+            (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
+    _t_p = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
+            (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
+    return _r_p, _t_p
+
 def _interface(
     are_boundary_have_incoherency: bool,
-    polarization: Optional[bool],
+    polarization: bool,
     _first_layer_theta: Union[float, jnp.ndarray],
     _second_layer_theta: Union[float, jnp.ndarray],
     _first_layer_n: Union[float, jnp.ndarray],
@@ -52,25 +135,6 @@ def _interface(
         - If polarization is False, return a vector [r_s, t_s] or [R_s, T_s].
         - If polarization is True, return a vector [r_p, t_p] or [R_p, T_p].
     """
-
-    # Fresnel equations for s-polarization (electric field perpendicular to the plane of incidence)
-    def _fresnel_s(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
-                   _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        _r_s = (_first_layer_n * jnp.cos(_first_layer_theta) - _second_layer_n * jnp.cos(_second_layer_theta)) / \
-                (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta))
-        _t_s = 2 * _first_layer_n * jnp.cos(_first_layer_theta) / \
-                (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta))
-        return _r_s, _t_s
-
-    # Fresnel equations for p-polarization (electric field parallel to the plane of incidence)
-    def _fresnel_p(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
-                   _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        _r_p = (_second_layer_n * jnp.cos(_first_layer_theta) - _first_layer_n * jnp.cos(_second_layer_theta)) / \
-                (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta))
-        _t_p = 2 * _first_layer_n * jnp.cos(_first_layer_theta) / \
-                (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta))
-        return _r_p, _t_p
-
     # Handle the incoherent case
     if are_boundary_have_incoherency:
         if polarization is None:
@@ -78,19 +142,19 @@ def _interface(
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _R_s = jnp.abs(_r_s) ** 2
-            _T_s = 1 - _R_s
+            _T_s = jnp.abs(_t_s) ** 2
             _R_p = jnp.abs(_r_p) ** 2
-            _T_p = 1 - _R_p
+            _T_p = jnp.abs(_t_p) ** 2
             return jnp.array([[_R_s, _R_p], [_T_s, _T_p]])
         elif polarization is False:
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _R_s = jnp.abs(_r_s) ** 2
-            _T_s = 1 - _R_s
+            _T_s = jnp.abs(_t_s) ** 2
             return jnp.array([_R_s, _T_s])
         elif polarization is True:
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _R_p = jnp.abs(_r_p) ** 2
-            _T_p = 1 - _R_p
+            _T_p = jnp.abs(_t_p) ** 2
             return jnp.array([_R_p, _T_p])
 
     # Handle the coherent case
