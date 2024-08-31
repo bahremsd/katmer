@@ -36,7 +36,7 @@ class Stack:
                                       monitored or optimized. Default is False.
                                       
         - obs_ellipsiometric (bool): Flag to determine whether ellipsometric parameters should be observed or optimized.
-                                     If True, ellipsometric parameters (like Psi and Delta) are included as observables
+                                     If True, ellipsometric parameters (Psi and Delta) are included as observables
                                      that can be monitored or optimized during the simulation or design process.
                                      Default is False.
                                      
@@ -48,19 +48,19 @@ class Stack:
                  
         - **kwargs: Additional keyword arguments that can be passed to the class.
         """        
-        self._thicknesses = None  # Store layer thicknesses
-        self._material_distribution = None  # Store material distribution
-        self._fixed_material_distribution = fixed_material_distribution  # Fixed material distribution flag
-        self._incoherency_list = None # Store incoherency as a boolean list
-        self._auto_coherency = auto_coherency  # Auto-coherency flag
-        self._any_incoherent = any_incoherent # Incoherency flag
-        self._incoming_nk = incoming_nk # Incoming medium nk data
-        self._outgoing_nk = outgoing_nk  # Outgoing medium nk data
-        self._is_material_set = False # Material setting flag
-        self._num_of_materials = None # Number of selected materials
-        self._obs_absorbed_energy = obs_absorbed_energy # Flag for absorbed energy is observable (optimizable) or not
-        self._obs_ellipsiometric = obs_ellipsiometric # Flag for absorbed energy is observable (optimizable) or not
-        self._obs_poynting = obs_poynting# Flag for absorbed energy is observable (optimizable) or not
+        self._thicknesses = None  # Store layer thicknesses.
+        self._material_distribution = None  # Store material distribution.
+        self._fixed_material_distribution = fixed_material_distribution  # Fixed material distribution flag.
+        self._incoherency_list = None # Store incoherency as a boolean list.
+        self._auto_coherency = auto_coherency  # Auto-coherency flag.
+        self._any_incoherent = any_incoherent # Incoherency flag.
+        self._incoming_nk = incoming_nk # Incoming medium nk data.
+        self._outgoing_nk = outgoing_nk  # Outgoing medium nk data.
+        self._is_material_set = False # Material setting flag.
+        self._num_of_materials = None # Number of selected materials.
+        self._obs_absorbed_energy = obs_absorbed_energy # Flag for absorbed energy is observable (optimizable) or not.
+        self._obs_ellipsiometric = obs_ellipsiometric # Flag for ellipsometric parameters are observable (optimizable) or not.
+        self._obs_poynting = obs_poynting# Flag for the Poynting vector is observable (optimizable) or not.
         
         # Handling fixed material distribution
         if not self._fixed_material_distribution:
@@ -96,20 +96,20 @@ class Stack:
 
     def _enumerate_materials(self, material_set: List[str]) -> Dict[int, str]:
         """
-        Enumerate materials to create a mapping from integer index to material name.
+        Enumerate materials to create a mapping from material name to integer index.
         
         Args:
         - material_set (List[str]): The set of materials to enumerate.
         
         Returns:
-        - Dict[int, str]: A dictionary mapping integer indices to material names.
+        - Dict[str, int]: A dictionary mapping integer indices to material names.
         """
         # Map material names to indices
         return {material: i for i, material in enumerate(material_set)}
 
     def _enumerate_material_keys(self, material_set: List[str]) -> Dict[int, str]:
         """
-        Enumerate materials to create a mapping from integer index to material name.
+        Enumerate material keys to create a mapping from integer index to material name.
         
         Args:
         - material_set (List[str]): The set of materials to enumerate.
@@ -330,6 +330,39 @@ class Stack:
         - (Union[float, jnp.ndarray]) : Float or jax.numpy array of outgoing_nk for outgoing nk data
         """
         return self._incoming_nk
+
+    # Getter for obs_absorbed_energy
+    @property
+    def obs_absorbed_energy(self) -> bool:
+        """
+        Get the obs_absorbed_energy boolean.
+
+        Returns:
+        - [bool]:Boolean for absorbed energy is observable (optimizable) or not.
+        """
+        return self._obs_absorbed_energy
+    
+    # Getter for obs_ellipsiometric
+    @property
+    def obs_ellipsiometric(self) -> bool:
+        """
+        Get the any_incoherent boolean.
+
+        Returns:
+        - [bool]:Boolean for ellipsometric parameters are observable (optimizable) or not.
+        """
+        return self._obs_ellipsiometric
+    
+    # Getter for obs_poynting
+    @property
+    def obs_poynting(self) -> bool:
+        """
+        Get the any_incoherent boolean.
+
+        Returns:
+        - [bool]:Boolean for the Poynting vector is observable (optimizable) or not.
+        """
+        return self._obs_poynting
 
     # Getter for num_of_materials
     @property
