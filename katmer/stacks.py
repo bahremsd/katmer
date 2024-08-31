@@ -15,7 +15,9 @@ class Stack:
 
     def __init__(self, auto_coherency: bool = True, any_incoherent: bool = None,
                  fixed_material_distribution: bool = False, incoming_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j),
-                 outgoing_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j), *args, **kwargs):
+                 outgoing_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j), 
+                 obs_absorbed_energy: bool = False, obs_ellipsiometric: bool = False,
+                 obs_poynting: bool = False, *args, **kwargs):
         """
         Initialize the Stack class with material data, layer thicknesses, and coherency options.
         
@@ -29,6 +31,22 @@ class Stack:
         - outgoing_nk (Union[float, jnp.ndarray]): This represents the nk information for the medium 
                       through which light exits the stack. Although this medium can be considered as a layer
                       with infinite thickness. Default is air.
+        - obs_absorbed_energy (bool): Flag to determine whether the absorbed energy in the stack should be observed
+                                      or optimized. If True, absorbed energy is an observable quantity that can be
+                                      monitored or optimized. Default is False.
+                                      
+        - obs_ellipsiometric (bool): Flag to determine whether ellipsometric parameters should be observed or optimized.
+                                     If True, ellipsometric parameters (like Psi and Delta) are included as observables
+                                     that can be monitored or optimized during the simulation or design process.
+                                     Default is False.
+                                     
+        - obs_poynting (bool): Flag to determine whether the Poynting vector (representing the directional energy flow)
+                               should be observed or optimized. If True, the Poynting vector is included as an observable
+                               quantity that can be monitored or optimized. Default is False.
+                               
+        - *args: Additional positional arguments that can be passed to the class.
+                 
+        - **kwargs: Additional keyword arguments that can be passed to the class.
         """        
         self._thicknesses = None  # Store layer thicknesses
         self._material_distribution = None  # Store material distribution
@@ -40,6 +58,9 @@ class Stack:
         self._outgoing_nk = outgoing_nk  # Outgoing medium nk data
         self._is_material_set = False # Material setting flag
         self._num_of_materials = None # Number of selected materials
+        self._obs_absorbed_energy = obs_absorbed_energy # Flag for absorbed energy is observable (optimizable) or not
+        self._obs_ellipsiometric = obs_ellipsiometric # Flag for absorbed energy is observable (optimizable) or not
+        self._obs_poynting = obs_poynting# Flag for absorbed energy is observable (optimizable) or not
         
         # Handling fixed material distribution
         if not self._fixed_material_distribution:
