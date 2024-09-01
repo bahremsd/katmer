@@ -171,10 +171,10 @@ def _interface(
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             return jnp.array([_r_p, _t_p])
 
-def _tmm(stack: Stack,
+def _tmm(stack: Stack, light: Light,
          polarization: Optional[Union[str, bool]],
-         theta: Union[float, jnp.ndarray],
-         wavelength: Union[float, jnp.ndarray]
+         theta_index: Union[int, jnp.ndarray],
+         wavelength_index: Union[int, jnp.ndarray]
         ) -> Union[
             Tuple[jnp.ndarray, jnp.ndarray],
             Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
@@ -197,10 +197,10 @@ def _tmm(stack: Stack,
                        layers.
         polarization (Optional[Union[str, bool]]): The polarization state of the incident light. 's' denotes s-polarization, 
                                                   'p' denotes p-polarization, and None indicates unpolarized light.
-        theta (Union[float, jnp.ndarray]): The angle of incidence (in radians) at which light strikes the multilayer thin 
-                                           film. This can be a single float value or a jnp array for angle-dependent 
+        theta_index (Union[float, jnp.ndarray]): The index of angle of incidence (in radians) at which light strikes the multilayer thin 
+                                           film. This can be a single int value or a jnp array for angle-dependent 
                                            computations.
-        wavelength (Union[float, jnp.ndarray]): The wavelength(s) of the incident light. This can be a single float value 
+        wavelength_index (Union[float, jnp.ndarray]): The index of wavelength(s) of the incident light. This can be a single int value 
                                                 or a jnp array to compute properties over a range of wavelengths.
 
     Returns:
@@ -212,7 +212,7 @@ def _tmm(stack: Stack,
               reflectance (R), transmittance (T), and optionally absorbed energy, ellipsometric data (psi, delta), 
               and the Poynting vector.
     """
-
+    
     # Helper function to calculate reflectance (R) and transmittance (T)
     def calculate_rt(stack, polarization, theta, wavelength):
         """
@@ -279,8 +279,10 @@ def _tmm(stack: Stack,
         # ...
         return poynting_vector
 
-    # Main computation logic
-    if stack.are_there_any_incoherent_layer:
+    # Main computation
+    theta = light.angle_of_incidence[theta_index]
+    wavelength = light.wavelength[wavelength_index]
+    if stack.any_incoherent:
         # Calculate reflectance (R) and transmittance (T) using incoherent layer assumptions
         R, T = calculate_rt(stack, polarization, theta, wavelength)
         return R, T
@@ -310,7 +312,7 @@ def _tmm(stack: Stack,
         return tuple(results)
 
 @jit
-def forward(_stack: Stack, _light: Light) -> Union[
+def forward(stack: Stack, light: Light) -> Union[
         jnp.ndarray, 
         tuple[jnp.ndarray, jnp.ndarray], 
         tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], 
@@ -343,18 +345,18 @@ def forward(_stack: Stack, _light: Light) -> Union[
     """
 
     # Extract polarization, theta, and wavelength from the Light object
-    _polarization = _light.polarization  # 's', 'p', or None (unpolarized)
-    _theta = _light.theta  # Array or single value for angle of incidence
-    _wavelength = _light.wavelength  # Array or single value for wavelength
+    _polarization = light.polarization  # 's', 'p', or None (unpolarized)
+    _theta_indices = jnp.arange(0,jnp.size(light.theta), dtype = int) # Array or single value for the indices of angle of incidence
+    _wavelength_indices = jnp.arange(0,jnp.size(light.wavelength), dtype = int) # Array or single value for  the indices of wavelength
 
     # Vectorize the _tmm function across theta and wavelength using JAX's vmap
     _tmm_vectorized = vmap(
         _tmm, 
-        in_axes=(None, None, 0, 0)  # Fix _stack and _polarization, vmap _theta and _wavelength
+        in_axes=(None, None, 0, 0)  # Fix _stack and _polarization, vmap _theta_indices and _wavelength_indices
     )
 
     # Apply the vectorized function to the theta and wavelength arrays
-    _result = _tmm_vectorized(_stack, _polarization, _theta, _wavelength)
+    _result = _tmm_vectorized(stack, light, _polarization, _theta_indices, _wavelength_indices)
 
     # Return the result
     return _result

@@ -13,7 +13,7 @@ class Stack:
     handling material properties, layer thicknesses, and incoherency options.
     """
 
-    def __init__(self, auto_coherency: bool = True, any_incoherent: bool = None,
+    def __init__(self, auto_coherency: bool = True, any_incoherent: bool = False,
                  fixed_material_distribution: bool = False, incoming_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j),
                  outgoing_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j), 
                  obs_absorbed_energy: bool = False, obs_ellipsiometric: bool = False,
