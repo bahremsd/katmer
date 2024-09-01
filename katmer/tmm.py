@@ -269,8 +269,9 @@ def _tmm(stack: Stack, light: Light,
         layers in the multilayer thin film. The r and t coefficients are complex quantities, from which reflectance, 
         transmittance, and other derived quantities like absorbed energy and ellipsometric data are computed.
         """
-        # Perform the calculations for coherent layers, resulting in complex coefficients r and t
-        # ...
+        
+        
+        
         return r, t
 
     # Helper function to calculate absorbed energy

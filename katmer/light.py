@@ -282,5 +282,3 @@ def compute_layer_angles(nk_functions: Dict[int, Callable],
     # Apply the vectorized function to get the 3D array of angles
     # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
     return vmap_compute_layer_angles(nk_list_2d, initial_theta)
-
-

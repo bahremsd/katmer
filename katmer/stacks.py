@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+from jax import vmap
 import numpy as np
 from typing import Callable, List, Dict, Union
 
@@ -79,6 +80,9 @@ class Stack:
 
         # Set initial theta array as None
         self._theta = None
+        
+        # Set kz array as None
+        self._kz = None
 
     def _scan_material_set(self, material_distribution: List[str]) -> List[str]:
         """
@@ -132,6 +136,95 @@ class Stack:
         """
         # Map material indices to their respective nk function based on material names
         return {i: interpolate_nk(material) for i, material in enumerate(self._material_set)}
+
+
+    def _compute_kz_one_wl(self, nk_list: jnp.ndarray, theta_index: Union[int, jnp.ndarray], 
+                           wavelength_index: Union[int, jnp.ndarray], wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
+        """
+        Computes the z-component of (complex) angular wavevector (kz)
+        (just for 1 wl and init theta nk value).
+    
+        Args:
+            nk_list (Array): A one-dimensional JAX array representing the complex refractive indices 
+                            of the materials in each layer of the multilayer thin film. Each element 
+                            is of the form `n + j*k`, where `n` is the refractive index, and `k` 
+                            is the extinction coefficient, which accounts for the absorption in the material.
+                            
+            initial_theta (Union[float, Array]): The angle of incidence (in radians) with respect to 
+                                                 the normal of the first layer. This argument can either 
+                                                 be a single float value (for single angle processing) 
+                                                 or a one-dimensional JAX array (for batch processing).
+                                                 
+        Returns:
+            Array: A JAX array containing the calculated angles of incidence for each layer.
+                   - If `initial_theta` is a float or 0-D, the function returns a one-dimensional array where 
+                     each element represents the angle of incidence in a specific layer.
+                   - If `initial_theta` is a one-dimensional array, the function returns a two-dimensional 
+                     array. Each row of this array corresponds to the angles of incidence across all layers 
+                     for a specific initial angle provided in `initial_theta`.
+        
+        Detailed Description:
+            The function starts by ensuring that the `initial_theta` input is treated as a one-dimensional 
+            array. Next, the function applies Snell's law to calculate the sine of the angle in each layer. 
+            Snell's law relates the angle of incidence and the refractive indices of two media through 
+            the equation: 
+                sin(theta_i) = (n_0 * sin(theta_0)) / n_i
+            where:
+                - theta_i is the angle of incidence in the ith layer,
+                - n_0 is the refractive index of the first layer,
+                - theta_0 is the initial angle of incidence,
+                - n_i is the refractive index of the ith layer.    
+        """
+        # Return a 1D theta array for each layer
+        return 2 * jnp.pi * nk_list[wavelength_index, :] * jnp.cos(self._theta[theta_index, wavelength_index, :]) / jnp.array(wavelength)[wavelength_index]
+    
+    def compute_kz(self, nk_functions: Dict[int, Callable],
+                   material_distribution: List[int], 
+                   initial_theta: Union[float, jnp.ndarray], 
+                   wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
+        """
+        Calculates the z-component of (complex) angular wavevector (kz) for a set of refractive indices (nk_list_2d) 
+        and an initial angle of incidence (initial_theta) using vectorization.
+    
+        Args:
+            nk_functions (Dict[int, Callable]): A dictionary where each key corresponds to an index 
+                                                in the material_distribution, and each value is a function 
+                                                that takes wavelength as input and returns the complex 
+                                                refractive index for that material.
+            material_distribution (List[int]): A list that describes the distribution of materials across 
+                                               the layers. Each element is an index to the nk_functions dictionary.
+            initial_theta (Union[float, jnp.ndarray]): The initial angle of incidence (in radians). Can be 
+                                                      a single float or a 1D/2D jax array (ndarray) depending 
+                                                      on the use case.
+            wavelength (Union[float, jnp.ndarray]): The wavelength or an array of wavelengths (ndarray) 
+                                                   for which the computation will be performed.
+    
+        Returns:
+            jnp.ndarray: A 3D JAX array where the [i, j, :] entry represents the angles of incidence 
+                         for the j-th initial angle at the i-th wavelength. The size of the third dimension 
+                         corresponds to the number of layers.
+        """
+        
+        # Create a function that retrieves the refractive indices for each material in the distribution
+        def get_nk_values(wl):
+            # For each material in the distribution, call the corresponding nk function with the given wavelength
+            return jnp.array([nk_functions[mat_idx](wl) for mat_idx in material_distribution])
+    
+        # Use vmap to vectorize the get_nk_values function over the wavelength dimension
+        # This will return a 2D array where each row corresponds to the refractive indices at a given wavelength
+        nk_list_2d = vmap(get_nk_values)(wavelength)
+        _theta_indices = jnp.arange(0,jnp.size(initial_theta), dtype = int) # Array or single value for the indices of angle of incidence
+        _wavelength_indices = jnp.arange(0,jnp.size(wavelength), dtype = int) # Array or single value for  the indices of wavelength
+        # Vectorize the _compute_layer_angles_one_wl function over the wavelength dimension (first dimension of nk_list_2d)
+        # in_axes=(0, None, 0) means:
+        # - The first argument (nk_list_2d) will not be vectorized
+        # - The second argument (initial_theta) will be vectorized over the first dimension
+        vmap_compute_kz = vmap(self._compute_kz_one_wl, in_axes=(None, None, 0 ,0, None))
+    
+        # Apply the vectorized function to get the 3D array of angles
+        # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
+        return vmap_compute_kz(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
+
 
     def __iter__(self):
         """
@@ -230,6 +323,8 @@ class Stack:
             self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions      
         self._theta = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                            initial_theta = theta, wavelength = wavelength)       
+        self._kz = self.compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
+                              initial_theta = theta, wavelength = wavelength)    
 
     # Getter for incoherency_list
     @property
