@@ -270,6 +270,8 @@ def _tmm(stack: Stack, light: Light,
         transmittance, and other derived quantities like absorbed energy and ellipsometric data are computed.
         """
         
+        layer_phases = stack.kz * stack.thicknesses
+        
         
         
         return r, t
