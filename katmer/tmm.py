@@ -1,9 +1,43 @@
 from typing import Optional, Union, Tuple
+import jax
 import jax.numpy as jnp
 from jax import vmap, jit
 
 from stacks import Stack
 from light import Light
+
+
+def _matmul(carry, mat):
+    """
+    Multiplies two complex matrices in a sequence.
+    
+    Args:
+        carry (jax.numpy.ndarray): The accumulated product of the matrices so far.
+                                   This is a 2x2 complex matrix.
+        mat (jax.numpy.ndarray): The current 2x2 complex matrix to multiply with the carry.
+        
+    Returns:
+        jax.numpy.ndarray: The updated product after multiplying the carry with the current matrix.
+                           This is also a 2x2 complex matrix.
+        None: A placeholder required by jax.lax.scan for compatibility.
+    """
+    return jnp.dot(carry, mat), None  # Perform matrix multiplication and return the result.
+
+
+def _cascaded_matrix_multiplication(matrices):
+    """
+    Performs cascaded matrix multiplication on a sequence of complex matrices using scan.
+    
+    Args:
+        matrices (jax.numpy.ndarray): An array of shape [N, 2, 2], where N is the number of 2x2 complex matrices.
+        
+    Returns:
+        jax.numpy.ndarray: The final result of multiplying all the matrices together in sequence.
+                           This is a single 2x2 complex matrix.
+    """
+    initial_value = jnp.eye(2, dtype=jnp.complex64)  # Start with the identity matrix of size 2x2.
+    result, _ = jax.lax.scan(_matmul, initial_value, matrices)  # Accumulate the product over all matrices.
+    return result  # Return the final accumulated product.
 
 def _fresnel_s(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
                _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -224,14 +258,7 @@ def _tmm(stack: Stack, light: Light,
         # Here, you would implement the necessary equations and matrix multiplications for R and T.
         # Depending on whether the layers are coherent or incoherent, different approaches will be applied.
         
-        if stack.are_there_any_incoherent_layer:
-            # Perform computations assuming incoherent layers
-            # ...
-            pass
-        else:
-            # Perform computations assuming coherent layers
-            # ...
-            pass
+        
 
         return R, T
 
