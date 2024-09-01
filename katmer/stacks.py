@@ -324,7 +324,7 @@ class Stack:
         self._theta = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                            initial_theta = theta, wavelength = wavelength)       
         self._kz = self.compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
-                              initial_theta = theta, wavelength = wavelength)    
+                                   initial_theta = theta, wavelength = wavelength)    
 
     # Getter for incoherency_list
     @property
@@ -364,6 +364,17 @@ class Stack:
         - List[bool]: jax.numpy array of theta for each layer.
         """
         return self._theta
+
+    # Getter for kz
+    @property
+    def kz(self) -> jnp.ndarray:
+        """
+        Get the list of theta jnp array.
+
+        Returns:
+        - List[bool]: jax.numpy array of kz for each layer, wl and theta.
+        """
+        return self._kz
 
     # Setter for incoherency_list
     @incoherency_list.setter
