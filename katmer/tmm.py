@@ -123,8 +123,8 @@ def _fresnel_p(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union
     return _r_p, _t_p
 
 def _interface(
-    are_boundary_have_incoherency: bool,
-    polarization: bool,
+    _any_incoherent: bool,
+    _polarization: bool,
     _first_layer_theta: Union[float, jnp.ndarray],
     _second_layer_theta: Union[float, jnp.ndarray],
     _first_layer_n: Union[float, jnp.ndarray],
@@ -137,12 +137,12 @@ def _interface(
 
     Parameters
     ----------
-    are_boundary_have_incoherency : bool
+    _any_incoherent : bool
         Flag indicating if any of the layers at the boundary are incoherent.
         - False: Both boundaries are coherent.
         - True: At least one boundary is incoherent.
     
-    polarization : Optional[bool]
+    _polarization : Optional[bool]
         Polarization state of the incoming light.
         - None: Both s and p polarizations (unpolarized light).
         - False: s-polarization.
@@ -170,8 +170,8 @@ def _interface(
         - If polarization is True, return a vector [r_p, t_p] or [R_p, T_p].
     """
     # Handle the incoherent case
-    if are_boundary_have_incoherency:
-        if polarization is None:
+    if _any_incoherent:
+        if _polarization is None:
             # Unpolarized light: both s and p polarizations
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
@@ -180,12 +180,12 @@ def _interface(
             _R_p = jnp.abs(_r_p) ** 2
             _T_p = jnp.abs(_t_p) ** 2
             return jnp.array([[_R_s, _R_p], [_T_s, _T_p]])
-        elif polarization is False:
+        elif _polarization is False:
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _R_s = jnp.abs(_r_s) ** 2
             _T_s = jnp.abs(_t_s) ** 2
             return jnp.array([_R_s, _T_s])
-        elif polarization is True:
+        elif _polarization is True:
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _R_p = jnp.abs(_r_p) ** 2
             _T_p = jnp.abs(_t_p) ** 2
@@ -193,15 +193,15 @@ def _interface(
 
     # Handle the coherent case
     else:
-        if polarization is None:
+        if _polarization is None:
             # Unpolarized light: both s and p polarizations
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             return jnp.array([[_r_s, _r_p], [_t_s, _t_p]])
-        elif polarization is False:
+        elif _polarization is False:
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             return jnp.array([_r_s, _t_s])
-        elif polarization is True:
+        elif _polarization is True:
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             return jnp.array([_r_p, _t_p])
 
