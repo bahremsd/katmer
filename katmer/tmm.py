@@ -7,24 +7,28 @@ from katmer.stacks import Stack
 from katmer.light import Light
 
 
-def _matmul(carry, mat):
+def _matmul(carry, phase_t_r):
     """
     Multiplies two complex matrices in a sequence.
     
     Args:
         carry (jax.numpy.ndarray): The accumulated product of the matrices so far.
                                    This is a 2x2 complex matrix.
-        mat (jax.numpy.ndarray): The current 2x2 complex matrix to multiply with the carry.
+        phase_t_r (jax.numpy.ndarray): phase = e^-i delta or  |e^-i delta|^2, t (or T) and r (or R)
         
     Returns:
         jax.numpy.ndarray: The updated product after multiplying the carry with the current matrix.
                            This is also a 2x2 complex matrix.
         None: A placeholder required by jax.lax.scan for compatibility.
     """
+    mat = jnp.array(1/phase_t_r[1]) * jnp.dot(jnp.array([[phase_t_r[0], 0],
+                                                         [0, phase_t_r[0]]]), 
+                                              jnp.array([[1, phase_t_r[2]],
+                                                         [phase_t_r[2], 1]]))
     return jnp.dot(carry, mat), None  # Perform matrix multiplication and return the result.
 
 
-def _cascaded_matrix_multiplication(matrices):
+def _cascaded_matrix_multiplication(phases_ts_rs):
     """
     Performs cascaded matrix multiplication on a sequence of complex matrices using scan.
     
@@ -36,7 +40,7 @@ def _cascaded_matrix_multiplication(matrices):
                            This is a single 2x2 complex matrix.
     """
     initial_value = jnp.eye(2, dtype=jnp.complex64)  # Start with the identity matrix of size 2x2.
-    result, _ = jax.lax.scan(_matmul, initial_value, matrices)  # Accumulate the product over all matrices.
+    result, _ = jax.lax.scan(_matmul, initial_value, phases_ts_rs)  # Accumulate the product over all matrices.
     return result  # Return the final accumulated product.
 
 def _fresnel_s(_first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
@@ -197,7 +201,7 @@ def _interface(
             # Unpolarized light: both s and p polarizations
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-            return jnp.array([[_r_s, _r_p], [_t_s, _t_p]])
+            return jnp.array([[_r_s, _t_s], [_r_p, _t_p]])
         elif _polarization is False:
             _r_s, _t_s = _fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             return jnp.array([_r_s, _t_s])

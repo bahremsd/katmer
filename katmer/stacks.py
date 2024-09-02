@@ -47,7 +47,7 @@ class Stack:
         - *args: Additional positional arguments that can be passed to the class.
                  
         - **kwargs: Additional keyword arguments that can be passed to the class.
-        """        
+        """       
         self._thicknesses = None  # Store layer thicknesses.
         self._material_distribution = None  # Store material distribution.
         self._fixed_material_distribution = fixed_material_distribution  # Fixed material distribution flag.
@@ -62,12 +62,16 @@ class Stack:
         self._obs_ellipsiometric = obs_ellipsiometric # Flag for ellipsometric parameters are observable (optimizable) or not.
         self._obs_poynting = obs_poynting# Flag for the Poynting vector is observable (optimizable) or not.
         
+        self._nk_funcs = None
+        
         # Handling fixed material distribution
         if not self._fixed_material_distribution:
             """
             In kwargs:
             - material_set (List[str], optional): List of material names, required if distribution is not fixed.
             """
+            if "material_set" not in kwargs:
+                raise ValueError("The 'material_set' key is missing from the input arguments.")
             material_set = kwargs.get("material_set", [])
             self._material_set = material_set  # Store material set
             self._is_material_set = True # Material set is not None
@@ -224,30 +228,6 @@ class Stack:
         # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
         return vmap_compute_kz(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
 
-
-    def __iter__(self):
-        """
-        Iterator that yields the thickness, complex refractive index (n + jk), and theta for each layer.
-    
-        Each iteration provides:
-        - d: The thickness of the current layer.
-        - nk_func: A function that returns the complex refractive index for the current layer at a given wavelength.
-        - theta_i: The angle of incidence/refraction at the current layer interface.
-        - theta_ip1: The angle at the next layer interface. Defaults to 0 if the current layer is the last one.
-        """
-        # Iterate over the range of layers in the material stack
-        for i in range(len(self._thicknesses)):
-            # Retrieve the thickness of the current layer
-            d = self._thicknesses[i]
-            # Retrieve the function that calculates the complex refractive index for the current layer
-            nk_func = self._nk_funcs[i]
-            # Retrieve the angle at the current layer interface
-            theta_i = self._theta[i]
-            # Retrieve the angle at the next layer interface if it exists, otherwise default to 0
-            theta_ip1 = self._theta[i+1] if i+1 < len(self._theta) else 0
-            # Yield a tuple containing the thickness, refractive index function, and angles for this layer
-            yield d, nk_func, theta_i, theta_ip1
-
     # Getter for thicknesses
     @property
     def thicknesses(self) -> List[float]:
@@ -291,16 +271,17 @@ class Stack:
         return self._material_distribution
 
     # Setter for material_distribution
-    @material_distribution.setter
-    def material_distribution(self, new_material_distribution: Union[List[int], List[str]], theta: Union[float, jnp.ndarray],
-                              wavelength: Union[float, jnp.ndarray]) -> None:
+    def set_material_distribution(self, material_info: tuple) -> None:
         """
         Set the material distribution list and update theta.
 
         Args:
-        - new_material_distribution (List[int]): Distribution of materials in the stack.
-        - theta (Union[float, jnp.ndarray]): Incoming light theta array to be used for inner angle calculation.
+            material_info (tuple): Tuple containing the new list of new_material_distribution.
+                - new_material_distribution (List[int]): Distribution of materials in the stack.
+                - theta (Union[float, jnp.ndarray]): Incoming light theta array to be used for inner angle calculation.
+                - wavelength (Union[float, jnp.ndarray]): Incoming light wavelength array.
         """
+        new_material_distribution, theta, wavelength = material_info
         # Check if the lengths of the provided lists are consistent
         if len(self._thicknesses) != len(new_material_distribution):
             raise ValueError("Length of initial_thicknesses and new_material_distribution must be the same.")
