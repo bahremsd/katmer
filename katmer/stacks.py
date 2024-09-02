@@ -330,6 +330,8 @@ class Stack:
         self._kz = self.compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)    
 
+        #calculate t and r here because it will not change when d is updated.
+
     # Getter for incoherency_list
     @property
     def incoherency_list(self) -> List[bool]:
