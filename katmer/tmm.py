@@ -213,86 +213,27 @@ def _interface(
 # import jax
 # import jax.numpy as jnp
 
-# # Define the scan interface function
-# def interface(carry, x):
-#     # Carry is an array with the results
-#     carry_idx, carry_values = carry
-#     carry_values = carry_values.at[carry_idx].set(x)  # Set the new value
-#     carry_idx = carry_idx + 1  # Move to the next index
-#     return (carry_idx, carry_values), None
-# # Define the scan function
-# def scan_function(inputs):
-#     n = len(inputs)  # Number of elements in inputs
-#     init_state = (0, jnp.zeros(n, dtype=jnp.float32))  # Initial state with an array of zeros
+# Define the scan interface function
+def interface(carry, x):
+    # Carry is an array with the results
+    carry_idx, carry_values = carry
+    carry_values = carry_values.at[carry_idx].set(x)  # Set the new value
+    carry_idx = carry_idx + 1  # Move to the next index
+    return (carry_idx, carry_values), None
+# Define the scan function
+def scan_function(inputs):
+    n = len(inputs)  # Number of elements in inputs
+    init_state = (0, jnp.zeros(n, dtype=jnp.float32))  # Initial state with an array of zeros
 
-#     # Use jax.lax.scan to iterate over inputs
-#     results, _ = jax.lax.scan(interface, init_state, inputs)
+    # Use jax.lax.scan to iterate over inputs
+    results, _ = jax.lax.scan(interface, init_state, inputs)
     
-#     return results
+    return results
 
 # # Example usage
 # inputs = jnp.linspace(10,1000,100)
 # results = scan_function(inputs)
 # print((results[1]))
-
-
-# Helper function to calculate the reflection (r) and transmission (t) coefficients for coherent layers
-def calculate_rt_coherent(stack, polarization, theta, wavelength):
-    """
-    This helper function computes the reflection (r) and transmission (t) coefficients, which are applicable for coherent
-    layers in the multilayer thin film. The r and t coefficients are complex quantities, from which reflectance, 
-    transmittance, and other derived quantities like absorbed energy and ellipsometric data are computed.
-    """
-    
-    layer_phases = stack.kz * stack.thicknesses
-    
-    
-    
-    return r, t
-
-# Helper function to calculate reflectance (R) and transmittance (T)
-def calculate_rt(stack, polarization, theta, wavelength):
-    """
-    This helper function computes the reflection and transmission coefficients, denoted as R and T, for the multilayer 
-    thin film. The calculation is performed using the Transfer Matrix Method (TMM), which involves constructing 
-    characteristic matrices for each layer, considering the angle of incidence, wavelength, and polarization of the light.
-    """
-
-
-    return R, T
-
-# Helper function to calculate absorbed energy
-def calculate_absorbed_energy(stack, r, t):
-    """
-    This helper function calculates the absorbed energy within the multilayer thin film structure. The calculation is 
-    dependent on the complex reflection (r) and transmission (t) coefficients, which provide information about how much 
-    energy is absorbed within each layer.
-    """
-    # Perform calculations based on r and t to determine absorbed energy
-    # ...
-    return absorbed_energy
-
-# Helper function to calculate ellipsometric data (psi, delta)
-def calculate_ellipsometric_data(stack, r, t):
-    """
-    This helper function computes the ellipsometric parameters psi and delta, which describe the change in polarization 
-    state as light reflects off the multilayer thin film. The calculations are based on the complex reflection coefficients 
-    (r) for different polarizations.
-    """
-    # Calculate psi and delta from r and t for coherent layers
-    # ...
-    return psi, delta
-
-# Helper function to calculate the Poynting vector
-def calculate_poynting_vector(stack, r, t):
-    """
-    The Poynting vector represents the directional energy flux (the rate of energy transfer per unit area) of the 
-    electromagnetic wave. This helper function calculates the Poynting vector based on the complex transmission coefficient 
-    (t) and the structure of the multilayer thin film.
-    """
-    # Calculate the Poynting vector based on t
-    # ...
-    return poynting_vector
 
 def _tmm(stack: Stack, light: Light,
          polarization: bool,
@@ -335,6 +276,63 @@ def _tmm(stack: Stack, light: Light,
               reflectance (R), transmittance (T), and optionally absorbed energy, ellipsometric data (psi, delta), 
               and the Poynting vector.
     """
+    # Helper function to calculate the reflection (r) and transmission (t) coefficients for coherent layers
+    def calculate_rt_coherent(stack, polarization, theta, wavelength):
+        """
+        This helper function computes the reflection (r) and transmission (t) coefficients, which are applicable for coherent
+        layers in the multilayer thin film. The r and t coefficients are complex quantities, from which reflectance, 
+        transmittance, and other derived quantities like absorbed energy and ellipsometric data are computed.
+        """
+        
+        layer_phases = stack.kz * stack.thicknesses
+        
+        
+        
+        return r, t
+
+    # Helper function to calculate reflectance (R) and transmittance (T)
+    def calculate_rt(stack, polarization, theta, wavelength):
+        """
+        This helper function computes the reflection and transmission coefficients, denoted as R and T, for the multilayer 
+        thin film. The calculation is performed using the Transfer Matrix Method (TMM), which involves constructing 
+        characteristic matrices for each layer, considering the angle of incidence, wavelength, and polarization of the light.
+        """
+
+
+        return R, T
+
+    # Helper function to calculate absorbed energy
+    def calculate_absorbed_energy(stack, r, t):
+        """
+        This helper function calculates the absorbed energy within the multilayer thin film structure. The calculation is 
+        dependent on the complex reflection (r) and transmission (t) coefficients, which provide information about how much 
+        energy is absorbed within each layer.
+        """
+        # Perform calculations based on r and t to determine absorbed energy
+        # ...
+        return absorbed_energy
+
+    # Helper function to calculate ellipsometric data (psi, delta)
+    def calculate_ellipsometric_data(stack, r, t):
+        """
+        This helper function computes the ellipsometric parameters psi and delta, which describe the change in polarization 
+        state as light reflects off the multilayer thin film. The calculations are based on the complex reflection coefficients 
+        (r) for different polarizations.
+        """
+        # Calculate psi and delta from r and t for coherent layers
+        # ...
+        return psi, delta
+
+    # Helper function to calculate the Poynting vector
+    def calculate_poynting_vector(stack, r, t):
+        """
+        The Poynting vector represents the directional energy flux (the rate of energy transfer per unit area) of the 
+        electromagnetic wave. This helper function calculates the Poynting vector based on the complex transmission coefficient 
+        (t) and the structure of the multilayer thin film.
+        """
+        # Calculate the Poynting vector based on t
+        # ...
+        return poynting_vector
     # Main computation
     theta = light.angle_of_incidence[theta_index]
     wavelength = light.wavelength[wavelength_index]
