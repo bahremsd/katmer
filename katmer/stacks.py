@@ -4,8 +4,8 @@ import numpy as np
 from typing import Callable, List, Dict, Union
 
 
-from autodiffthinfilms.data import interpolate_nk
-from autodiffthinfilms.light import compute_layer_angles
+from katmer.data import interpolate_nk
+from katmer.light import compute_layer_angles
 
 class Stack:
     """
@@ -15,9 +15,8 @@ class Stack:
     """
 
     def __init__(self, auto_coherency: bool = True, any_incoherent: bool = False,
-                 fixed_material_distribution: bool = False, incoming_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j),
-                 outgoing_nk: Union[float, jnp.ndarray] = jnp.array(1 + 0j), 
-                 obs_absorbed_energy: bool = False, obs_ellipsiometric: bool = False,
+                 fixed_material_distribution: bool = False, incoming_medium: str = "Air",
+                 outgoing_medium: str = "Air", obs_absorbed_energy: bool = False, obs_ellipsiometric: bool = False,
                  obs_poynting: bool = False, *args, **kwargs):
         """
         Initialize the Stack class with material data, layer thicknesses, and coherency options.
@@ -26,10 +25,10 @@ class Stack:
         - auto_coherency (bool): Flag to determine whether coherency should be automatically handled.
         - any_incoherent (bool): Flag to indicate whether there are any incoherent layers in the stack.
         - fixed_material_distribution (bool): Determines if material distribution is fixed.
-        - incoming_nk (Union[float, jnp.ndarray]): This represents the nk information for the medium 
+        - incoming_medium (str): This represents the nk information for the medium 
                       through which light enters the stack. Although this medium can be considered as a layer
                       with infinite thickness. Default is air.
-        - outgoing_nk (Union[float, jnp.ndarray]): This represents the nk information for the medium 
+        - outgoing_medium (str): This represents the nk information for the medium 
                       through which light exits the stack. Although this medium can be considered as a layer
                       with infinite thickness. Default is air.
         - obs_absorbed_energy (bool): Flag to determine whether the absorbed energy in the stack should be observed
@@ -55,8 +54,8 @@ class Stack:
         self._incoherency_list = None # Store incoherency as a boolean list.
         self._auto_coherency = auto_coherency  # Auto-coherency flag.
         self._any_incoherent = any_incoherent # Incoherency flag.
-        self._incoming_nk = incoming_nk # Incoming medium nk data.
-        self._outgoing_nk = outgoing_nk  # Outgoing medium nk data.
+        self._incoming_medium = interpolate_nk(incoming_medium) # Incoming medium nk function.
+        self._outgoing_medium = interpolate_nk(outgoing_medium)  # Outgoing medium nk function.
         self._is_material_set = False # Material setting flag.
         self._num_of_materials = None # Number of selected materials.
         self._obs_absorbed_energy = obs_absorbed_energy # Flag for absorbed energy is observable (optimizable) or not.
@@ -415,27 +414,27 @@ class Stack:
         """
         return self._any_incoherent
     
-    # Getter for incoming_nk
+    # Getter for incoming_medium nk function
     @property
-    def incoming_nk(self) -> Union[float, jnp.ndarray]:
+    def incoming_medium(self) -> Callable:
         """
         Get the incoming medium nk data.
 
         Returns:
-        - (Union[float, jnp.ndarray]) : Float or jax.numpy array of incoming_nk for incoming nk data
+        - (Callable) : Integer of incoming_medium index for incoming nk data function
         """
-        return self._incoming_nk
+        return self._incoming_medium
 
-    # Getter for outgoing_nk
+    # Getter for outgoing_medium nk function
     @property
-    def outgoing_nk(self) -> Union[float, jnp.ndarray]:
+    def outgoing_medium(self) -> Callable:
         """
         Get the outgoing medium nk data.
 
         Returns:
-        - (Union[float, jnp.ndarray]) : Float or jax.numpy array of outgoing_nk for outgoing nk data
+        - (Callable) : Integer of _outgoing_medium index for outgoing nk data
         """
-        return self._incoming_nk
+        return self._outgoing_medium
 
     # Getter for obs_absorbed_energy
     @property
