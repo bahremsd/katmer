@@ -228,6 +228,30 @@ class Stack:
         # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
         return vmap_compute_kz(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
 
+
+    def __iter__(self):
+        """
+        Iterator that yields the thickness, complex refractive index (n + jk), and theta for each layer.
+    
+        Each iteration provides:
+        - d: The thickness of the current layer.
+        - nk_func: A function that returns the complex refractive index for the current layer at a given wavelength.
+        - theta_i: The angle of incidence/refraction at the current layer interface.
+        - theta_ip1: The angle at the next layer interface. Defaults to 0 if the current layer is the last one.
+        """
+        # Iterate over the range of layers in the material stack
+        for i in range(len(self._thicknesses)):
+            # Retrieve the thickness of the current layer
+            d = self._thicknesses[i]
+            # Retrieve the function that calculates the complex refractive index for the current layer
+            nk_func = self._nk_funcs[i]
+            # Retrieve the angle at the current layer interface
+            theta_i = self._theta[i]
+            # Retrieve the angle at the next layer interface if it exists, otherwise default to 0
+            theta_ip1 = self._theta[i+1] if i+1 < len(self._theta) else 0
+            # Yield a tuple containing the thickness, refractive index function, and angles for this layer
+            yield d, nk_func, theta_i, theta_ip1
+
     # Getter for thicknesses
     @property
     def thicknesses(self) -> List[float]:

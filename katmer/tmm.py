@@ -209,6 +209,33 @@ def _interface(
             _r_p, _t_p = _fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
             return jnp.array([_r_p, _t_p])
 
+
+# import jax
+# import jax.numpy as jnp
+
+# # Define the scan interface function
+# def interface(carry, x):
+#     # Carry is an array with the results
+#     carry_idx, carry_values = carry
+#     carry_values = carry_values.at[carry_idx].set(x)  # Set the new value
+#     carry_idx = carry_idx + 1  # Move to the next index
+#     return (carry_idx, carry_values), None
+# # Define the scan function
+# def scan_function(inputs):
+#     n = len(inputs)  # Number of elements in inputs
+#     init_state = (0, jnp.zeros(n, dtype=jnp.float32))  # Initial state with an array of zeros
+
+#     # Use jax.lax.scan to iterate over inputs
+#     results, _ = jax.lax.scan(interface, init_state, inputs)
+    
+#     return results
+
+# # Example usage
+# inputs = jnp.linspace(10,1000,100)
+# results = scan_function(inputs)
+# print((results[1]))
+
+
 # Helper function to calculate the reflection (r) and transmission (t) coefficients for coherent layers
 def calculate_rt_coherent(stack, polarization, theta, wavelength):
     """
