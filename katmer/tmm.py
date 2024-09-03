@@ -27,7 +27,6 @@ def _matmul(carry, phase_t_r):
                                                          [phase_t_r[2], 1]]))
     return jnp.dot(carry, mat), None  # Perform matrix multiplication and return the result.
 
-
 def _cascaded_matrix_multiplication(phases_ts_rs):
     """
     Performs cascaded matrix multiplication on a sequence of complex matrices using scan.
@@ -43,10 +42,22 @@ def _cascaded_matrix_multiplication(phases_ts_rs):
     result, _ = jax.lax.scan(_matmul, initial_value, phases_ts_rs)  # Accumulate the product over all matrices.
     return result  # Return the final accumulated product.
 
+def _create_phases_ts_rs(_trs, _phases, polarization):
+    N = _phases.shape[0]  # Get the dimension N
+
+    if polarization is None:
+        def process_element(i):
+            return (_phases[i], _trs[i][0, 0], _trs[i][0, 1], _trs[i][1, 0], _trs[i][1, 1])
+    else:
+        def process_element(i):
+            return [_phases[i], _trs[i][0], _trs[i][1]]
+
+    # Apply process_element function across all indices
+    result = jax.vmap(process_element)(jnp.arange(N))
+    return result
 
 
 def _tmm(stack: Stack, light: Light,
-         polarization: bool,
          theta_index: Union[int, jnp.ndarray],
          wavelength_index: Union[int, jnp.ndarray]
         ) -> Union[
@@ -86,29 +97,18 @@ def _tmm(stack: Stack, light: Light,
               reflectance (R), transmittance (T), and optionally absorbed energy, ellipsometric data (psi, delta), 
               and the Poynting vector.
     """
-    # Helper function to calculate the reflection (r) and transmission (t) coefficients for coherent layers
-    def calculate_rt_coherent(stack, polarization, theta, wavelength):
-        """
-        This helper function computes the reflection (r) and transmission (t) coefficients, which are applicable for coherent
-        layers in the multilayer thin film. The r and t coefficients are complex quantities, from which reflectance, 
-        transmittance, and other derived quantities like absorbed energy and ellipsometric data are computed.
-        """
-        
-        layer_phases = stack.kz * stack.thicknesses
-        
-        
-        
-        return r, t
-
     # Helper function to calculate reflectance (R) and transmittance (T)
-    def calculate_rt(stack, polarization, theta, wavelength):
+    def calculate_rt():
         """
         This helper function computes the reflection and transmission coefficients, denoted as R and T, for the multilayer 
         thin film. The calculation is performed using the Transfer Matrix Method (TMM), which involves constructing 
         characteristic matrices for each layer, considering the angle of incidence, wavelength, and polarization of the light.
         """
-
-
+        layer_phases = stack.kz[theta_index, wavelength_index, :] * stack.thicknesses
+        _phases_ts_rs = _create_phases_ts_rs(stack.rt[theta_index, wavelength_index, :], layer_phases, light.polarization)
+        _tr_matrix = _cascaded_matrix_multiplication(_phases_ts_rs)
+        R = _tr_matrix[1,0] / _tr_matrix[0,0]
+        T = 1 / _tr_matrix[0,0]
         return R, T
 
     # Helper function to calculate absorbed energy
@@ -143,34 +143,22 @@ def _tmm(stack: Stack, light: Light,
         # Calculate the Poynting vector based on t
         # ...
         return poynting_vector
-    # Main computation
-    theta = light.angle_of_incidence[theta_index]
-    wavelength = light.wavelength[wavelength_index]
-    if stack.any_incoherent:
-        # Calculate reflectance (R) and transmittance (T) using incoherent layer assumptions
-        R, T = calculate_rt(stack, polarization, theta, wavelength)
-        return R, T
-    else:
-        # Calculate reflection (r) and transmission (t) using coherent layer assumptions
-        r, t = calculate_rt_coherent(stack, polarization, theta, wavelength)
 
-        # Reflectance and transmittance are derived from r and t for coherent layers
-        R = jnp.abs(r)**2
-        T = jnp.abs(t)**2
-
-        # Conditional outputs based on Stack object flags
-        results = [R, T]
+    R, T = calculate_rt()
+    results = [R, T]
+    
+    if not stack.any_incoherent:
 
         if stack.obs_absorbed_energy:
-            absorbed_energy = calculate_absorbed_energy(stack, r, t)
+            absorbed_energy = calculate_absorbed_energy(stack, R, T)
             results.append(absorbed_energy)
 
         if stack.obs_ellipsiometric:
-            psi, delta = calculate_ellipsometric_data(stack, r, t)
-            results.extend([psi, delta])
+            psi, delta = calculate_ellipsometric_data(stack, R, T)
+            results.append([psi, delta])
 
         if stack.obs_poynting:
-            poynting_vector = calculate_poynting_vector(stack, r, t)
+            poynting_vector = calculate_poynting_vector(stack, R, T)
             results.append(poynting_vector)
 
         return tuple(results)
