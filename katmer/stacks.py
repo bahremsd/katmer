@@ -87,6 +87,12 @@ class Stack:
         
         # Set kz array as None
         self._kz = None
+        
+        # Set _rt array as None
+        self._rt = None
+        
+        # Set polarization array as None        
+        self.polarization = None
 
     def _scan_material_set(self, material_distribution: List[str]) -> List[str]:
         """
@@ -402,9 +408,6 @@ class Stack:
                 _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
                 return jnp.array([_r_p, _t_p])
 
-
-
-
     def _compute_rt_at_interface(self, carry, concatenated_nk_list, theta):
         carry_idx, carry_values = carry
         
@@ -546,7 +549,8 @@ class Stack:
         self._kz = self._compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)    
 
-        #calculate t and r here because it will not change when d is updated.
+        self._rt = self._compute_rt(nk_functions = self._nk_funcs, polarization = self._polarization, material_distribution = self._material_distribution,
+                                   initial_theta = theta, wavelength = wavelength)   
 
     # Getter for incoherency_list
     @property
