@@ -92,7 +92,7 @@ class Stack:
         self._rt = None
         
         # Set polarization array as None        
-        self.polarization = None
+        self._polarization = None
 
     def _scan_material_set(self, material_distribution: List[str]) -> List[str]:
         """
@@ -234,13 +234,6 @@ class Stack:
         # Apply the vectorized function to get the 3D array of angles
         # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
         return vmap_compute_kz(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
-
-
-
-
-
-
-
 
     def _fresnel_s(self, _first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
                    _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -439,7 +432,7 @@ class Stack:
         stacked_theta = jnp.stack([self._theta[theta_index, wavelength_index, :], padded_theta[1:]], axis=1)        
 
         # Use jax.lax.scan to iterate over inputs1 and inputs2
-        rt_one_wl, _ = jax.lax.scan(lambda carry, ntheta: _compute_rt_at_interface(carry, ntheta[0], ntheta[1]),
+        rt_one_wl, _ = jax.lax.scan(lambda carry, ntheta: self._compute_rt_at_interface(carry, ntheta[0], ntheta[1]),
                                   init_state, (stacked_nk_list, stacked_theta))        
 
         # Return a 1D theta array for each layer
@@ -524,14 +517,14 @@ class Stack:
                 - theta (Union[float, jnp.ndarray]): Incoming light theta array to be used for inner angle calculation.
                 - wavelength (Union[float, jnp.ndarray]): Incoming light wavelength array.
         """
-        new_material_distribution, theta, wavelength = material_info
+        new_material_distribution, theta, wavelength, polarization = material_info
         # Check if the lengths of the provided lists are consistent
         if len(self._thicknesses) != len(new_material_distribution):
             raise ValueError("Length of initial_thicknesses and new_material_distribution must be the same.")
         if self._fixed_material_distribution and self._is_material_set:
             raise ValueError("Material distribution is fixed and cannot be reassigned.")
         self._material_distribution = new_material_distribution
-    
+        
         if not self._is_material_set:
             if any(isinstance(item, int) for item in new_material_distribution):
                 raise ValueError("The list contains numbers, which is not allowed in the first assignment of the materials.")
@@ -543,7 +536,8 @@ class Stack:
             self._material_enum_keys = self._enumerate_material_keys(self._material_set)  # Integer to material mapping
             self._material_distribution = [int(self._material_enum[material]) for material in new_material_distribution]
             # Initialize nk functions dictionary using iterate_nk_data
-            self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions      
+            self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions
+            self._polarization = polarization
         self._theta = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                            initial_theta = theta, wavelength = wavelength)       
         self._kz = self._compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
@@ -766,8 +760,6 @@ class Stack:
         header = 'layer material,thickness,coherency'
         np.savetxt(filename, data_array, delimiter=',', fmt='%s', header=header, comments='')
 
-
-
 def determine_coherency(thicknesses: jnp.ndarray) -> List[bool]:
     """
     Determine the incoherency of layers based on their thickness.
@@ -783,52 +775,3 @@ def determine_coherency(thicknesses: jnp.ndarray) -> List[bool]:
     # Incoherency if the squared thickness exceeds the threshold
     incoherency_list = jnp.greater(d_squared, threshold)
     return list(incoherency_list)  # Convert the result back to a list of booleans
-
-def _compute_rt_at_interface(carry, x):
-    carry_idx, carry_values = carry
-    
-    # Use jax.lax.cond to handle conditional logic
-    carry_values = jax.lax.cond(
-        carry_idx < len(carry_values) - 1,  # Condition
-        lambda _: carry_values.at[carry_idx].set(x + carry_values[carry_idx + 1]),  # True branch
-        lambda _: carry_values,  # False branch (no change)
-        operand=None
-    )
-    
-    carry_idx = carry_idx + 1  # Move to the next index
-    return (carry_idx, carry_values), None
-
-
-# Define the scan interface function
-def interface(carry, x1, x2):
-    carry_idx, carry_values = carry
-    
-    # Compute the sum of x1[i] + x1[i+1] + x2[i] + x2[i+1]
-    sum_value = x1[0] + x1[1] + x2[0] + x2[1]
-    
-    # Store the sum in the carry_values array
-    carry_values = carry_values.at[carry_idx].set(sum_value)
-    
-    carry_idx = carry_idx + 1  # Move to the next index
-    return (carry_idx, carry_values), None
-
-# Define the scan function
-def scan_function(inputs1, inputs2):
-    n = len(inputs1)  # Number of elements in the input arrays
-    
-    # Create shifted versions of inputs1 and inputs2 with an extra zero at the end
-    padded_inputs1 = jnp.pad(inputs1, (0, 1), constant_values=0)
-    padded_inputs2 = jnp.pad(inputs2, (0, 1), constant_values=0)
-    
-    # Stack the original and shifted inputs for processing in pairs
-    stacked_inputs1 = jnp.stack([inputs1, padded_inputs1[1:]], axis=1)
-    stacked_inputs2 = jnp.stack([inputs2, padded_inputs2[1:]], axis=1)
-    
-    # Initialize state with an array of zeros for the carry values
-    init_state = (0, jnp.zeros(n, dtype=jnp.float32))
-
-    # Use jax.lax.scan to iterate over inputs1 and inputs2
-    results, _ = jax.lax.scan(lambda carry, xs: interface(carry, xs[0], xs[1]),
-                              init_state, (stacked_inputs1, stacked_inputs2))
-    
-    return results
