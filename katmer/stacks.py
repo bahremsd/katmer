@@ -186,7 +186,7 @@ class Stack:
                 - n_i is the refractive index of the ith layer.    
         """
         # Return a 1D theta array for each layer
-        return 2 * jnp.pi * nk_list[wavelength_index, :] * jnp.cos(self._theta[theta_index, wavelength_index, :]) / jnp.array(wavelength)[wavelength_index]
+        return 2 * jnp.pi * nk_list[wavelength_index, :] * jnp.cos(self._theta[theta_index, wavelength_index, 1:-1]) / jnp.array(wavelength)[wavelength_index]
     
     def _compute_kz(self, nk_functions: Dict[int, Callable],
                    material_distribution: List[int], 
@@ -401,7 +401,8 @@ class Stack:
                 _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
                 return jnp.array([_r_p, _t_p])
 
-    def _compute_rt_at_interface(self, carry, concatenated_nk_list, theta):
+    def _compute_rt_at_interface(self, carry, concatenated_nk_list_theta):
+        concatenated_nk_list, theta = concatenated_nk_list_theta
         carry_idx, carry_values = carry
         
         # Compute r,t
@@ -426,23 +427,30 @@ class Stack:
 
         #concatenated_nk_list = jnp.concatenate([self._incoming_medium(wavelength[wavelength_index]), nk_list[wavelength_index, :], self.outgoing_medium(wavelength[wavelength_index])])
         if self._polarization == None:
-            init_state = (0, jnp.zeros((len(nk_list)+1, 2, 2), dtype=jnp.float32))  # Initial state with an array of zeros
+            init_state = (0, jnp.zeros((len(nk_values)+1, 2, 2), dtype=jnp.float32))  # Initial state with an array of zeros
         else:
-            init_state = (0, jnp.zeros((len(nk_list)+1, 2), dtype=jnp.float32))  # Initial state with an array of zeros
+            init_state = (0, jnp.zeros((len(nk_values)+1, 2), dtype=jnp.float32))  # Initial state with an array of zeros
         
         # Create shifted versions of inputs1 and inputs2 with an extra zero at the end
         padded_concatenated_nk_list = jnp.pad(concatenated_nk_list, (0, 1), constant_values=0)
+        print(padded_concatenated_nk_list.shape)
         padded_theta = jnp.pad(self._theta[theta_index, wavelength_index, :], (0, 1), constant_values=0)
+        print(padded_concatenated_nk_list.shape)
         # Stack the original and shifted inputs for processing in pairs
         stacked_nk_list = jnp.stack([concatenated_nk_list, padded_concatenated_nk_list[1:]], axis=1)
         stacked_theta = jnp.stack([self._theta[theta_index, wavelength_index, :], padded_theta[1:]], axis=1)        
-
+        print(stacked_nk_list.shape)
+        print(stacked_theta.shape)
         # Use jax.lax.scan to iterate over inputs1 and inputs2
-        rt_one_wl, _ = jax.lax.scan(lambda carry, ntheta: self._compute_rt_at_interface(carry, ntheta[0], ntheta[1]),
-                                  init_state, (stacked_nk_list, stacked_theta))        
+        #rt_one_wl, _ = jax.lax.scan(lambda carry, ntheta: self._compute_rt_at_interface(carry, ntheta[0], ntheta[1]),
+        #                          init_state, (stacked_nk_list, stacked_theta))        
+
+        # Now use this function in `jax.lax.scan`
+        rt_one_wl, _ = jax.lax.scan(self._compute_rt_at_interface, init_state, (stacked_nk_list, stacked_theta))
+
 
         # Return a 1D theta array for each layer
-        return rt_one_wl
+        return rt_one_wl[1]
     
     def _compute_rt(self, nk_functions: Dict[int, Callable],
                    material_distribution: List[int], 
@@ -545,13 +553,15 @@ class Stack:
             self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions
             self._polarization = polarization
         self._theta = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
-                                           initial_theta = theta, wavelength = wavelength, polarization = self._polarization)
+                                           initial_theta = theta, wavelength = wavelength, polarization = self._polarization,
+                                           incoming_medium = self._incoming_medium, outgoing_medium = self._outgoing_medium)
         print((self._theta).shape)       
         self._kz = self._compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)    
         print((self._kz).shape) 
         self._rt = self._compute_rt(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
-                                   initial_theta = theta, wavelength = wavelength)   
+                                   initial_theta = theta, wavelength = wavelength) 
+        print((self._rt).shape)  
 
     # Getter for incoherency_list
     @property
