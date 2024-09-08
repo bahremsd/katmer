@@ -229,8 +229,8 @@ class Stack:
         # in_axes=(0, None, 0) means:
         # - The first argument (nk_list_2d) will not be vectorized
         # - The second argument (initial_theta) will be vectorized over the first dimension
-        vmap_compute_kz = vmap(self._compute_kz_one_wl, in_axes=(None, None, 0 ,0, None))
-    
+        vmap_compute_kz = vmap(vmap(self._compute_kz_one_wl, (None, None, 0, None)), (None, 0, None, None))
+
         # Apply the vectorized function to get the 3D array of angles
         # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
         return vmap_compute_kz(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
@@ -416,10 +416,16 @@ class Stack:
         carry_idx = carry_idx + 1  # Move to the next index
         return (carry_idx, carry_values), None
 
-    def _compute_rt_one_wl(self, nk_list: jnp.ndarray, polarization: bool, theta_index: Union[int, jnp.ndarray], 
+    def _compute_rt_one_wl(self, nk_list: jnp.ndarray, theta_index: Union[int, jnp.ndarray], 
                            wavelength_index: Union[int, jnp.ndarray], wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
-        concatenated_nk_list = jnp.concatenate([self._incoming_medium(wavelength[wavelength_index]), nk_list[wavelength_index, :], self.outgoing_medium(wavelength[wavelength_index])])
-        if polarization == None:
+        incoming_medium = jnp.expand_dims(self._incoming_medium(wavelength[wavelength_index]), axis=0)
+        nk_values = nk_list[wavelength_index, :]
+        outgoing_medium = jnp.expand_dims(self.outgoing_medium(wavelength[wavelength_index]), axis=0)
+
+        concatenated_nk_list = jnp.concatenate([incoming_medium, nk_values, outgoing_medium], axis=0)
+
+        #concatenated_nk_list = jnp.concatenate([self._incoming_medium(wavelength[wavelength_index]), nk_list[wavelength_index, :], self.outgoing_medium(wavelength[wavelength_index])])
+        if self._polarization == None:
             init_state = (0, jnp.zeros((len(nk_list)+1, 2, 2), dtype=jnp.float32))  # Initial state with an array of zeros
         else:
             init_state = (0, jnp.zeros((len(nk_list)+1, 2), dtype=jnp.float32))  # Initial state with an array of zeros
@@ -458,8 +464,8 @@ class Stack:
         # in_axes=(0, None, 0) means:
         # - The first argument (nk_list_2d) will not be vectorized
         # - The second argument (initial_theta) will be vectorized over the first dimension
-        vmap_compute_rt = vmap(self._compute_rt_one_wl, in_axes=(None, None, 0 ,0, None))
-    
+        vmap_compute_rt = vmap(vmap(self._compute_rt_one_wl, (None, None, 0, None)), (None, 0, None, None))
+
         # Apply the vectorized function to get the 3D array of angles
         # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
         return vmap_compute_rt(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
@@ -539,11 +545,12 @@ class Stack:
             self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions
             self._polarization = polarization
         self._theta = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
-                                           initial_theta = theta, wavelength = wavelength)       
+                                           initial_theta = theta, wavelength = wavelength, polarization = self._polarization)
+        print((self._theta).shape)       
         self._kz = self._compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)    
-
-        self._rt = self._compute_rt(nk_functions = self._nk_funcs, polarization = self._polarization, material_distribution = self._material_distribution,
+        print((self._kz).shape) 
+        self._rt = self._compute_rt(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)   
 
     # Getter for incoherency_list
