@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 from jax import vmap
+import jax
 import numpy as np
 import sys
 from typing import Optional, Union, Tuple, Dict, Callable, List
@@ -50,9 +51,9 @@ class Light:
 
         if polarization is None:
             self._polarization = None
-        elif polarization == 's':
+        elif polarization == 's' or polarization == False:
             self._polarization = False  # s-polarization corresponds to False
-        elif polarization == 'p':
+        elif polarization == 'p' or polarization == True:
             self._polarization = True   # p-polarization corresponds to True
         else:
             raise ValueError("Invalid value for polarization. "
@@ -137,7 +138,7 @@ def is_propagating_wave(n: Union[float, jnp.ndarray], theta: Union[float, jnp.nd
     Determines whether the wave is propagating forward through the stack based on the angle, 
     refractive index, and polarization.
     
-    Parameters:
+    Args:
     n (Union[float, jnp.ndarray]): Refractive index of the medium (can be complex).
     theta (Union[float, jnp.ndarray]): Angle of incidence (in radians) with respect to the normal.
     polarization (Optional[bool]): Determines the polarization state:
@@ -161,48 +162,71 @@ def is_propagating_wave(n: Union[float, jnp.ndarray], theta: Union[float, jnp.nd
     """
     # Calculate n * cos(theta) to evaluate propagation direction for s-polarization
     n_cos_theta = n * jnp.cos(theta)
-    
-    # Handle the evanescent and lossy cases by checking the imaginary part
-    if jnp.abs(n_cos_theta.imag) > EPSILON * 1e3:
+
+
+
+
+    def define_is_forward_if_bigger_than_eps(_):
         # For evanescent or lossy mediums, forward is determined by decay
-        is_forward_s = n_cos_theta.imag > 0
+        is_forward_s = jnp.sign(n_cos_theta.imag)
         is_forward_p = is_forward_s  # The decay condition applies to both polarizations equally
-    else:
+        return is_forward_s, is_forward_p
+    
+    def define_is_forward_if_smaller_than_eps(_):
         # For s-polarization: Re[n cos(theta)] > 0
-        is_forward_s = n_cos_theta.real > 0
+        is_forward_s = jnp.sign(n_cos_theta.real)
         
         # For p-polarization: Re[n cos(theta*)] > 0
         n_cos_theta_star = n * jnp.cos(jnp.conj(theta))
-        is_forward_p = n_cos_theta_star.real > 0
+        is_forward_p = jnp.sign(n_cos_theta_star.real)
+        return is_forward_s, is_forward_p
 
+    # Handle the evanescent and lossy cases by checking the imaginary part
+    condition = jnp.abs(n_cos_theta.imag) > EPSILON * 1e3
+    is_forward_s, is_forward_p = jax.lax.cond(condition, define_is_forward_if_bigger_than_eps, define_is_forward_if_smaller_than_eps, None)
     # Return based on polarization argument
     if polarization is None:
         # Unpolarized case: Return tuple (s-polarization, p-polarization)
-        return bool(is_forward_s), bool(is_forward_p)
+        return jnp.array([is_forward_s, is_forward_p])
     elif polarization is False:
         # s-polarization case
-        return bool(is_forward_s)
+        return jnp.array([is_forward_s])
     elif polarization is True:
         # p-polarization case
-        return bool(is_forward_p)
+        return jnp.array([is_forward_p])
 
 
-def _compute_layer_angles_one_wl(nk_list: jnp.ndarray, initial_theta: Union[float, jnp.ndarray]) -> jnp.ndarray:
+def _compute_layer_angles_one_theta_one_wl(nk_functions: Dict[int, Callable],
+                                    material_distribution: List[int], 
+                                    initial_theta: Union[float, jnp.ndarray], 
+                                    wavelength: Union[float, jnp.ndarray],
+                                    polarization: Optional[bool]) -> jnp.ndarray:
     """
     Computes the angle of incidence for light in each layer of a multilayer thin film using Snell's law 
     (just for 1 wl and init theta nk value).
 
     Args:
-        nk_list (Array): A one-dimensional JAX array representing the complex refractive indices 
-                        of the materials in each layer of the multilayer thin film. Each element 
-                        is of the form `n + j*k`, where `n` is the refractive index, and `k` 
-                        is the extinction coefficient, which accounts for the absorption in the material.
-                        
+        nk_functions (Dict[int, Callable]): A dictionary where each key corresponds to an index 
+                                            in the material_distribution, and each value is a function 
+                                            that takes wavelength as input and returns the complex 
+                                            refractive index for that material.
+
+        material_distribution (List[int]): A list that describes the distribution of materials across 
+                                           the layers. Each element is an index to the nk_functions dictionary.  
+
         initial_theta (Union[float, Array]): The angle of incidence (in radians) with respect to 
                                              the normal of the first layer. This argument can either 
                                              be a single float value (for single angle processing) 
                                              or a one-dimensional JAX array (for batch processing).
-                                             
+
+        wavelength (Union[float, jnp.ndarray]): The wavelength or an array of wavelengths (ndarray) 
+                                               for which the computation will be performed.
+
+        polarization (Optional[bool]): Determines the polarization state:
+            - None: Unpolarized (returns a tuple of booleans for both s and p polarizations).
+            - False: s-polarization (returns a boolean for s-polarization).
+            - True: p-polarization (returns a boolean for p-polarization).     
+
     Returns:
         Array: A JAX array containing the calculated angles of incidence for each layer.
                - If `initial_theta` is a float or 0-D, the function returns a one-dimensional array where 
@@ -223,24 +247,46 @@ def _compute_layer_angles_one_wl(nk_list: jnp.ndarray, initial_theta: Union[floa
             - theta_0 is the initial angle of incidence,
             - n_i is the refractive index of the ith layer.    
     """
+    # Create a function that retrieves the refractive indices for each material in the distribution
+    def get_nk_values(wl):
+        # For each material in the distribution, call the corresponding nk function with the given wavelength
+        return jnp.array([nk_functions[mat_idx](wl) for mat_idx in material_distribution])
+    
+    nk_list = get_nk_values(wavelength)
+
     # Calculate the sine of the angles in the first layer using Snell's law
     sin_theta = jnp.sin(initial_theta) * nk_list[0] / nk_list
     # Compute the angle (theta) in each layer using the arcsin function
     # jnp.arcsin is preferred for compatibility with complex values if needed
     theta_array = jnp.arcsin(sin_theta)
     # If the angle is not forward-facing, we subtract it from pi to flip the orientation.
-    if not is_propagating_wave(nk_list[0], theta_array[0]):
-        theta_array = theta_array.at[0].set(jnp.pi - theta_array[0])
-    if not is_propagating_wave(nk_list[-1], theta_array[-1]):
-        theta_array = theta_array.at[-1].set(jnp.pi - theta_array[-1])
-        
+    is_incoming_props = is_propagating_wave(nk_list[0], theta_array[0], polarization)
+    is_outgoing_props = is_propagating_wave(nk_list[-1], theta_array[-1], polarization)
+
+    def update_theta_arr_incoming(_):
+        return theta_array.at[0].set(jnp.pi - theta_array[0])
+
+    def update_theta_arr_outgoing(_):
+        return theta_array.at[-1].set(jnp.pi - theta_array[-1])
+    
+    def return_unchanged_theta(_):
+        return theta_array
+
+    # Handle the evanescent and lossy cases by checking the imaginary part
+    condition_incoming = jnp.any(jnp.logical_or(jnp.all(is_incoming_props == jnp.array([1, 1])), is_incoming_props == jnp.array([1])))
+    condition_outgoing = jnp.any(jnp.logical_or(jnp.all(is_outgoing_props == jnp.array([1, 1])), is_outgoing_props == jnp.array([1])))
+
+    theta_array = jax.lax.cond(condition_incoming, update_theta_arr_incoming, return_unchanged_theta, operand=None)
+    theta_array = jax.lax.cond(condition_outgoing, update_theta_arr_outgoing, return_unchanged_theta, operand=None)
+
     # Return a 1D theta array for each layer
     return theta_array
 
 def compute_layer_angles(nk_functions: Dict[int, Callable], 
                          material_distribution: List[int], 
                          initial_theta: Union[float, jnp.ndarray], 
-                         wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
+                         wavelength: Union[float, jnp.ndarray],
+                         polarization: Optional[bool]) -> jnp.ndarray:
     """
     Calculates the angles of incidence across layers for a set of refractive indices (nk_list_2d) 
     and an initial angle of incidence (initial_theta) using vectorization.
@@ -250,35 +296,35 @@ def compute_layer_angles(nk_functions: Dict[int, Callable],
                                             in the material_distribution, and each value is a function 
                                             that takes wavelength as input and returns the complex 
                                             refractive index for that material.
+
         material_distribution (List[int]): A list that describes the distribution of materials across 
                                            the layers. Each element is an index to the nk_functions dictionary.
+
         initial_theta (Union[float, jnp.ndarray]): The initial angle of incidence (in radians). Can be 
                                                   a single float or a 1D/2D jax array (ndarray) depending 
                                                   on the use case.
+
         wavelength (Union[float, jnp.ndarray]): The wavelength or an array of wavelengths (ndarray) 
                                                for which the computation will be performed.
+
+        polarization (Optional[bool]): Determines the polarization state:
+            - None: Unpolarized (returns a tuple of booleans for both s and p polarizations).
+            - False: s-polarization (returns a boolean for s-polarization).
+            - True: p-polarization (returns a boolean for p-polarization).  
 
     Returns:
         jnp.ndarray: A 3D JAX array where the [i, j, :] entry represents the angles of incidence 
                      for the j-th initial angle at the i-th wavelength. The size of the third dimension 
                      corresponds to the number of layers.
     """
-    
-    # Create a function that retrieves the refractive indices for each material in the distribution
-    def get_nk_values(wl):
-        # For each material in the distribution, call the corresponding nk function with the given wavelength
-        return jnp.array([nk_functions[mat_idx](wl) for mat_idx in material_distribution])
-
-    # Use vmap to vectorize the get_nk_values function over the wavelength dimension
-    # This will return a 2D array where each row corresponds to the refractive indices at a given wavelength
-    nk_list_2d = vmap(get_nk_values)(wavelength)
-
-    # Vectorize the _compute_layer_angles_one_wl function over the wavelength dimension (first dimension of nk_list_2d)
+    initial_theta = jnp.array(initial_theta, dtype = float)
+    wavelength = jnp.array(wavelength, dtype = float)
+    # Vectorize the _compute_layer_angles_one_theta_one_wl function over the wavelength dimension (first dimension of nk_list_2d)
     # in_axes=(0, None, 0) means:
     # - The first argument (nk_list_2d) will not be vectorized
     # - The second argument (initial_theta) will be vectorized over the first dimension
-    vmap_compute_layer_angles = vmap(_compute_layer_angles_one_wl, in_axes=(None, 0))
+    vmap_compute_layer_angles = vmap(vmap(_compute_layer_angles_one_theta_one_wl, (None,None, None, 0, None)), (None,None, 0, None, None))
 
     # Apply the vectorized function to get the 3D array of angles
     # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
-    return vmap_compute_layer_angles(nk_list_2d, initial_theta)
+    return vmap_compute_layer_angles(nk_functions, material_distribution, initial_theta, wavelength, polarization)
