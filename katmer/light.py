@@ -200,7 +200,9 @@ def _compute_layer_angles_one_theta_one_wl(nk_functions: Dict[int, Callable],
                                     material_distribution: List[int], 
                                     initial_theta: Union[float, jnp.ndarray], 
                                     wavelength: Union[float, jnp.ndarray],
-                                    polarization: Optional[bool]) -> jnp.ndarray:
+                                    polarization: Optional[bool],
+                                    incoming_medium: Callable,
+                                    outgoing_medium: Callable) -> jnp.ndarray:
     """
     Computes the angle of incidence for light in each layer of a multilayer thin film using Snell's law 
     (just for 1 wl and init theta nk value).
@@ -254,14 +256,19 @@ def _compute_layer_angles_one_theta_one_wl(nk_functions: Dict[int, Callable],
     
     nk_list = get_nk_values(wavelength)
 
+    incoming_medium_nk = jnp.expand_dims(incoming_medium(wavelength), axis=0)
+    outgoing_medium_nk = jnp.expand_dims(outgoing_medium(wavelength), axis=0)
+
+    concatenated_nk_list = jnp.concatenate([incoming_medium_nk, nk_list, outgoing_medium_nk], axis=0)
+
     # Calculate the sine of the angles in the first layer using Snell's law
-    sin_theta = jnp.sin(initial_theta) * nk_list[0] / nk_list
+    sin_theta = jnp.sin(initial_theta) * concatenated_nk_list[0] / concatenated_nk_list
     # Compute the angle (theta) in each layer using the arcsin function
     # jnp.arcsin is preferred for compatibility with complex values if needed
     theta_array = jnp.arcsin(sin_theta)
     # If the angle is not forward-facing, we subtract it from pi to flip the orientation.
-    is_incoming_props = is_propagating_wave(nk_list[0], theta_array[0], polarization)
-    is_outgoing_props = is_propagating_wave(nk_list[-1], theta_array[-1], polarization)
+    is_incoming_props = is_propagating_wave(concatenated_nk_list[0], theta_array[0], polarization)
+    is_outgoing_props = is_propagating_wave(concatenated_nk_list[-1], theta_array[-1], polarization)
 
     def update_theta_arr_incoming(_):
         return theta_array.at[0].set(jnp.pi - theta_array[0])
@@ -286,7 +293,9 @@ def compute_layer_angles(nk_functions: Dict[int, Callable],
                          material_distribution: List[int], 
                          initial_theta: Union[float, jnp.ndarray], 
                          wavelength: Union[float, jnp.ndarray],
-                         polarization: Optional[bool]) -> jnp.ndarray:
+                         polarization: Optional[bool],
+                         incoming_medium: Callable,
+                         outgoing_medium: Callable) -> jnp.ndarray:
     """
     Calculates the angles of incidence across layers for a set of refractive indices (nk_list_2d) 
     and an initial angle of incidence (initial_theta) using vectorization.
@@ -323,8 +332,8 @@ def compute_layer_angles(nk_functions: Dict[int, Callable],
     # in_axes=(0, None, 0) means:
     # - The first argument (nk_list_2d) will not be vectorized
     # - The second argument (initial_theta) will be vectorized over the first dimension
-    vmap_compute_layer_angles = vmap(vmap(_compute_layer_angles_one_theta_one_wl, (None,None, None, 0, None)), (None,None, 0, None, None))
+    vmap_compute_layer_angles = vmap(vmap(_compute_layer_angles_one_theta_one_wl, (None,None, None, 0, None, None, None)), (None,None, 0, None, None, None, None))
 
     # Apply the vectorized function to get the 3D array of angles
     # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
-    return vmap_compute_layer_angles(nk_functions, material_distribution, initial_theta, wavelength, polarization)
+    return vmap_compute_layer_angles(nk_functions, material_distribution, initial_theta, wavelength, polarization, incoming_medium, outgoing_medium)
