@@ -163,7 +163,7 @@ def _tmm(stack: Stack, light: Light,
 
         return tuple(results)
 
-@jit
+
 def forward(stack: Stack, light: Light) -> Union[
         jnp.ndarray, 
         tuple[jnp.ndarray, jnp.ndarray], 
@@ -198,17 +198,14 @@ def forward(stack: Stack, light: Light) -> Union[
 
     # Extract polarization, theta, and wavelength from the Light object
     _polarization = light.polarization  # 's', 'p', or None (unpolarized)
-    _theta_indices = jnp.arange(0,jnp.size(light.theta), dtype = int) # Array or single value for the indices of angle of incidence
-    _wavelength_indices = jnp.arange(0,jnp.size(light.wavelength), dtype = int) # Array or single value for  the indices of wavelength
+    _theta_indices = jnp.arange(0,len(light.angle_of_incidence), dtype = int) # Array or single value for the indices of angle of incidence
+    _wavelength_indices = jnp.arange(0,len(light.wavelength), dtype = int) # Array or single value for  the indices of wavelength
 
     # Vectorize the _tmm function across theta and wavelength using JAX's vmap
-    _tmm_vectorized = vmap(
-        _tmm, 
-        in_axes=(None, None, 0, 0)  # Fix _stack and _polarization, vmap _theta_indices and _wavelength_indices
-    )
+    _tmm_vectorized = vmap(vmap(_tmm, (None, None, 0, None)), (None, 0, None, None)) # Fix _stack and _polarization, vmap _theta_indices and _wavelength_indices
 
     # Apply the vectorized function to the theta and wavelength arrays
-    _result = _tmm_vectorized(stack, light, _polarization, _theta_indices, _wavelength_indices)
+    _result = _tmm_vectorized(stack, light, _theta_indices, _wavelength_indices)
 
     # Return the result
     return _result
