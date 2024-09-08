@@ -32,7 +32,7 @@ def load_nk_data(material_name: str = '') -> Union[jnp.ndarray, None]:
     if not material_name:
         raise ValueError("Material name cannot be an empty string.")
     # Construct the file path and check if the file exists
-    file_path = os.path.join('nk_data', f'{material_name}.csv')
+    file_path = os.getcwd()+"/katmer/" + os.path.join('nk_data', f'{material_name}.csv') #delete this os.getcwd()+"/katmer/" after setup.py installation
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"No data found for material '{material_name}' in 'nk_data/' folder (library database).")
     # Load the data from the .csv file
