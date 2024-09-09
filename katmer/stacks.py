@@ -674,6 +674,17 @@ class Stack:
         """
         return self._outgoing_medium
 
+    # Getter for rt array
+    @property
+    def rt(self) -> jnp.ndarray:
+        """
+        Get the rt array.
+
+        Returns:
+        - (jnp.ndarray) : Array of _outgoing_medium index for rt array
+        """
+        return self._rt
+
     # Getter for obs_absorbed_energy
     @property
     def obs_absorbed_energy(self) -> bool:
