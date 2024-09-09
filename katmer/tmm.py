@@ -202,7 +202,7 @@ def forward(stack: Stack, light: Light) -> Union[
     _wavelength_indices = jnp.arange(0,len(light.wavelength), dtype = int) # Array or single value for  the indices of wavelength
 
     # Vectorize the _tmm function across theta and wavelength using JAX's vmap
-    _tmm_vectorized = vmap(vmap(_tmm, (None, None, 0, None)), (None, 0, None, None)) # Fix _stack and _polarization, vmap _theta_indices and _wavelength_indices
+    _tmm_vectorized = vmap(vmap(_tmm, (None, None, 0, None)), (None, None, None, 0)) # Fix _stack and _polarization, vmap _theta_indices and _wavelength_indices
 
     # Apply the vectorized function to the theta and wavelength arrays
     _result = _tmm_vectorized(stack, light, _theta_indices, _wavelength_indices)
