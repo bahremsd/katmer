@@ -1,3 +1,4 @@
+include katmer/nk_data/*.csv
 include LICENSE
 include HISTORY.md
 include Containerfile
