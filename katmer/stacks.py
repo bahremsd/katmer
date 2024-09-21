@@ -83,7 +83,7 @@ class Stack:
             self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions
 
         # Set initial theta array as None
-        self._theta = None
+        self._layer_angles = None
         
         # Set kz array as None
         self._kz = None
@@ -148,8 +148,11 @@ class Stack:
         return {i: interpolate_nk(material) for i, material in enumerate(self._material_set)}
 
 
-    def _compute_kz_one_wl(self, nk_list: jnp.ndarray, theta_index: Union[int, jnp.ndarray], 
-                           wavelength_index: Union[int, jnp.ndarray], wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
+    def _compute_kz_one_wl(self, 
+                           nk_list: jnp.ndarray, # Array of complex refractive indices for different wavelengths
+                           angle_index: Union[int, jnp.ndarray], # Index of angle of incidence for each layer
+                           wavelength_index: Union[int, jnp.ndarray], # Index of wavelength array
+                           wavelength: jnp.ndarray) -> jnp.ndarray:
         """
         Computes the z-component of (complex) angular wavevector (kz)
         (just for 1 wl and init theta nk value).
@@ -160,10 +163,6 @@ class Stack:
                             is of the form `n + j*k`, where `n` is the refractive index, and `k` 
                             is the extinction coefficient, which accounts for the absorption in the material.
                             
-            initial_theta (Union[float, Array]): The angle of incidence (in radians) with respect to 
-                                                 the normal of the first layer. This argument can either 
-                                                 be a single float value (for single angle processing) 
-                                                 or a one-dimensional JAX array (for batch processing).
                                                  
         Returns:
             Array: A JAX array containing the calculated angles of incidence for each layer.
@@ -185,25 +184,20 @@ class Stack:
                 - theta_0 is the initial angle of incidence,
                 - n_i is the refractive index of the ith layer.    
         """
-        # Return a 1D theta array for each layer
-        return 2 * jnp.pi * nk_list[wavelength_index, :] * jnp.cos(self._theta[theta_index, wavelength_index, 1:-1]) / jnp.array(wavelength)[wavelength_index]
-    
-    def _compute_kz(self, nk_functions: Dict[int, Callable],
-                   material_distribution: List[int], 
-                   initial_theta: Union[float, jnp.ndarray], 
+        # Calculate the z-component of the wave vector for each wavelength and angle
+        return 2 * jnp.pi * nk_list[wavelength_index, :] * jnp.cos(self._layer_angles[angle_index, wavelength_index, :]) / jnp.array(wavelength)[wavelength_index]
+
+
+
+    def _compute_kz(self,
+                   layer_angles: Union[float, jnp.ndarray], 
                    wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
         """
         Calculates the z-component of (complex) angular wavevector (kz) for a set of refractive indices (nk_list_2d) 
-        and an initial angle of incidence (initial_theta) using vectorization.
+        and an initial angle of incidence (layer_angles) using vectorization.
     
         Args:
-            nk_functions (Dict[int, Callable]): A dictionary where each key corresponds to an index 
-                                                in the material_distribution, and each value is a function 
-                                                that takes wavelength as input and returns the complex 
-                                                refractive index for that material.
-            material_distribution (List[int]): A list that describes the distribution of materials across 
-                                               the layers. Each element is an index to the nk_functions dictionary.
-            initial_theta (Union[float, jnp.ndarray]): The initial angle of incidence (in radians). Can be 
+            layer_angles (Union[float, jnp.ndarray]): The initial angle of incidence (in radians). Can be 
                                                       a single float or a 1D/2D jax array (ndarray) depending 
                                                       on the use case.
             wavelength (Union[float, jnp.ndarray]): The wavelength or an array of wavelengths (ndarray) 
@@ -218,17 +212,17 @@ class Stack:
         # Create a function that retrieves the refractive indices for each material in the distribution
         def get_nk_values(wl):
             # For each material in the distribution, call the corresponding nk function with the given wavelength
-            return jnp.array([nk_functions[mat_idx](wl) for mat_idx in material_distribution])
+            return jnp.array([self._nk_funcs[mat_idx](wl) for mat_idx in self._material_distribution])
     
         # Use vmap to vectorize the get_nk_values function over the wavelength dimension
         # This will return a 2D array where each row corresponds to the refractive indices at a given wavelength
         nk_list_2d = vmap(get_nk_values)(wavelength)
-        _theta_indices = jnp.arange(0,jnp.size(initial_theta), dtype = int) # Array or single value for the indices of angle of incidence
+        _theta_indices = jnp.arange(0,jnp.size(layer_angles), dtype = int) # Array or single value for the indices of angle of incidence
         _wavelength_indices = jnp.arange(0,jnp.size(wavelength), dtype = int) # Array or single value for  the indices of wavelength
         # Vectorize the _compute_layer_angles_one_wl function over the wavelength dimension (first dimension of nk_list_2d)
         # in_axes=(0, None, 0) means:
         # - The first argument (nk_list_2d) will not be vectorized
-        # - The second argument (initial_theta) will be vectorized over the first dimension
+        # - The second argument (layer_angles) will be vectorized over the first dimension
         vmap_compute_kz = vmap(vmap(self._compute_kz_one_wl, (None, None, 0, None)), (None, 0, None, None))
 
         # Apply the vectorized function to get the 3D array of angles
@@ -434,11 +428,11 @@ class Stack:
         # Create shifted versions of inputs1 and inputs2 with an extra zero at the end
         padded_concatenated_nk_list = jnp.pad(concatenated_nk_list, (0, 1), constant_values=0)
         print(padded_concatenated_nk_list.shape)
-        padded_theta = jnp.pad(self._theta[theta_index, wavelength_index, :], (0, 1), constant_values=0)
+        padded_theta = jnp.pad(self._layer_angles[theta_index, wavelength_index, :], (0, 1), constant_values=0)
         print(padded_concatenated_nk_list.shape)
         # Stack the original and shifted inputs for processing in pairs
         stacked_nk_list = jnp.stack([concatenated_nk_list, padded_concatenated_nk_list[1:]], axis=1)
-        stacked_theta = jnp.stack([self._theta[theta_index, wavelength_index, :], padded_theta[1:]], axis=1)        
+        stacked_theta = jnp.stack([self._layer_angles[theta_index, wavelength_index, :], padded_theta[1:]], axis=1)        
         print(stacked_nk_list.shape)
         print(stacked_theta.shape)
         # Use jax.lax.scan to iterate over inputs1 and inputs2
@@ -552,10 +546,10 @@ class Stack:
             # Initialize nk functions dictionary using iterate_nk_data
             self._nk_funcs = self._create_nk_funcs(interpolate_nk)  # Initialize nk functions
             self._polarization = polarization
-        self._theta = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
+        self._layer_angles = compute_layer_angles(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                            initial_theta = theta, wavelength = wavelength, polarization = self._polarization,
                                            incoming_medium = self._incoming_medium, outgoing_medium = self._outgoing_medium)
-        print((self._theta).shape)       
+        print((self._layer_angles).shape)       
         self._kz = self._compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)    
         print((self._kz).shape) 
@@ -600,7 +594,7 @@ class Stack:
         Returns:
         - List[bool]: jax.numpy array of theta for each layer.
         """
-        return self._theta
+        return self._layer_angles
 
     # Getter for kz
     @property
