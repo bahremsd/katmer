@@ -49,7 +49,7 @@ def _matmul(carry, phase_t_r):
 
     return result, None  # Return the updated matrix and None as a placeholder for jax.lax.scan
 
-def _cascaded_matrix_multiplication(phases_ts_rs: jnp.ndarray, polarization: bool = None) -> jnp.ndarray:
+def _cascaded_matrix_multiplication(phases_ts_rs: jnp.ndarray) -> jnp.ndarray:
     """
     Performs cascaded matrix multiplication on a sequence of complex matrices using scan.
 
@@ -64,9 +64,6 @@ def _cascaded_matrix_multiplication(phases_ts_rs: jnp.ndarray, polarization: boo
     initial_value = jnp.eye(2, dtype=jnp.complex128)  
     # Initialize with the identity matrix of size 2x2. # The identity matrix acts as the multiplicative identity, 
     # ensuring that the multiplication starts correctly.
-    
-    if polarization is None:
-        
 
     # jax.lax.scan applies a function across the sequence of matrices. 
     #Here, _matmul is the function applied, starting with the identity matrix.
@@ -76,13 +73,12 @@ def _cascaded_matrix_multiplication(phases_ts_rs: jnp.ndarray, polarization: boo
     return result  # Return the final accumulated matrix product. # The result is the product of all input matrices in the given sequence.
 
 
-
-def _create_phases_ts_rs(_trs: jnp.ndarray, _phases: jnp.ndarray, polarization: bool = None) -> jnp.ndarray:
+def _create_phases_ts_rs(_trs: jnp.ndarray, _phases: jnp.ndarray) -> jnp.ndarray:
     """
     Create a new array combining phase and ts values.
 
     Args:
-        _trs (jnp.ndarray): A 2D array of shape (N, 2) or (N, 2, 2) where N is the number of elements. 
+        _trs (jnp.ndarray): A 2D array of shape (N, 2) where N is the number of elements. 
                             Each element is a pair of values [t, s].
         _phases (jnp.ndarray): A 1D array of shape (N,) containing phase values for each element.
 
@@ -93,49 +89,26 @@ def _create_phases_ts_rs(_trs: jnp.ndarray, _phases: jnp.ndarray, polarization: 
 
     N = _phases.shape[0]  # Get the number of elements (N) in the _phases array
 
+    def process_element(i: int) -> List[float]:
+        """
+        Process an individual element to create a list of phase and ts values.
 
-    if polarization is None:
-        
-        def process_element(i: int) -> List[float]:
-            """
-            Process an individual element to create a list of phase and ts values.
+        Args:
+            i (int): Index of the element to process.
 
-            Args:
-                i (int): Index of the element to process.
-
-            Returns:
-                List[float]: A list containing [phase, t, s] where:
-                    - phase: The phase value from _phases at index i
-                    - t: The first value of the pair in _trs at index i
-                    - s: The second value of the pair in _trs at index i
-            """
-            return [_phases[i], _trs[i][0, 0], _trs[i][0, 1], _trs[i][1, 0], _trs[i][1, 1]]  # Return the phase and ts values as a list
-
-    else:
-        
-        def process_element(i: int) -> List[float]:
-            """
-            Process an individual element to create a list of phase and ts values.
-    
-            Args:
-                i (int): Index of the element to process.
-    
-            Returns:
-                List[float]: A list containing [phase, t, s] where:
-                    - phase: The phase value from _phases at index i
-                    - t: The first value of the pair in _trs at index i
-                    - s: The second value of the pair in _trs at index i
-            """
-            return [_phases[i], _trs[i][0], _trs[i][1]]  # Return the phase and ts values as a list
-    
-
+        Returns:
+            List[float]: A list containing [phase, t, s] where:
+                - phase: The phase value from _phases at index i
+                - t: The first value of the pair in _trs at index i
+                - s: The second value of the pair in _trs at index i
+        """
+        return [_phases[i], _trs[i][0], _trs[i][1]]  # Return the phase and ts values as a list
 
     # Apply process_element function across all indices from 0 to N-1
     result = jax.vmap(process_element)(jnp.arange(N))  # jax.vmap vectorizes the process_element function
                                                     # to apply it across all indices efficiently
     
     return result  # Return the result as a 2D array of shape (N, 3)
-
 
 
 def _tmm(stack: Stack, light: Light,
