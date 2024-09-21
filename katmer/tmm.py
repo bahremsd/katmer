@@ -1,16 +1,11 @@
-from typing import Optional, Union, Tuple
-import jax
-import jax.numpy as jnp
-from jax import vmap, jit
-
-from katmer.stacks import Stack
-from katmer.light import Light
-
-
 import jax
 jax.config.update('jax_enable_x64', True) # Ensure high precision (64-bit) is enabled in JAX
+from jax import vmap # Import JAX library for vectorizing coeffs
 import jax.numpy as jnp # Import JAX's version of NumPy for differentiable computations
-from typing import Union, List
+from typing import Union, List, Tuple
+
+from .stacks import Stack
+from .light import Light
 
 def _matmul(carry, phase_t_r):
     """
