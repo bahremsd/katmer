@@ -8,6 +8,248 @@ from typing import Callable, List, Dict, Union, Tuple
 from katmer.data import interpolate_nk
 from katmer.light import compute_layer_angles
 
+
+def _fresnel_s(_first_layer_n: Union[float, jnp.ndarray], 
+               _second_layer_n: Union[float, jnp.ndarray],
+               _first_layer_theta: Union[float, jnp.ndarray], 
+               _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    This function calculates the Fresnel reflection (r_s) and transmission (t_s) coefficients 
+    for s-polarized light (electric field perpendicular to the plane of incidence) at the interface 
+    between two materials. The inputs are the refractive indices and the angles of incidence and 
+    refraction for the two layers.
+
+    Args:
+        _first_layer_n (Union[float, jnp.ndarray]): Refractive index of the first layer (incident medium). 
+            Can be a float or an array if computing for multiple incident angles/materials.
+        _second_layer_n (Union[float, jnp.ndarray]): Refractive index of the second layer (transmitted medium). 
+            Similar to the first argument, this can also be a float or an array.
+        _first_layer_theta (Union[float, jnp.ndarray]): Angle of incidence in the first layer (in radians). 
+            Can be a float or an array.
+        _second_layer_theta (Union[float, jnp.ndarray]): Angle of refraction in the second layer (in radians). 
+            Can be a float or an array.
+
+    Returns:
+        Tuple[jnp.ndarray, jnp.ndarray]: A tuple containing two jax.numpy arrays:
+            - r_s: The Fresnel reflection coefficient for s-polarized light.
+            - t_s: The Fresnel transmission coefficient for s-polarized light.
+    """
+    
+    # Calculate the reflection coefficient for s-polarized light using Fresnel's equations.
+    # The formula: r_s = (n1 * cos(theta1) - n2 * cos(theta2)) / (n1 * cos(theta1) + n2 * cos(theta2))
+    # This measures how much of the light is reflected at the interface.
+    r_s = ((_first_layer_n * jnp.cos(_first_layer_theta) - _second_layer_n * jnp.cos(_second_layer_theta)) /
+           (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
+    
+    # Calculate the transmission coefficient for s-polarized light using Fresnel's equations.
+    # The formula: t_s = 2 * n1 * cos(theta1) / (n1 * cos(theta1) + n2 * cos(theta2))
+    # This measures how much of the light is transmitted through the interface.
+    t_s = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
+           (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
+    
+    # Return the reflection and transmission coefficients as a JAX array
+    return jnp.array([r_s, t_s])
+
+
+def _fresnel_p(_first_layer_n: Union[float, jnp.ndarray], 
+               _second_layer_n: Union[float, jnp.ndarray],
+               _first_layer_theta: Union[float, jnp.ndarray], 
+               _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    This function calculates the Fresnel reflection (r_p) and transmission (t_p) coefficients 
+    for p-polarized light at the interface between two different media. It uses the refractive indices
+    of the two media (_first_layer_n and _second_layer_n) and the incident and transmitted angles
+    (_first_layer_theta and _second_layer_theta) to compute these values.
+
+    Args:
+        _first_layer_n: Refractive index of the first medium (can be float or ndarray).
+        _second_layer_n: Refractive index of the second medium (can be float or ndarray).
+        _first_layer_theta: Incident angle (in radians) in the first medium (can be float or ndarray).
+        _second_layer_theta: Transmitted angle (in radians) in the second medium (can be float or ndarray).
+
+    Returns:
+        Tuple[jnp.ndarray, jnp.ndarray]: A tuple containing two arrays:
+            - r_p: The reflection coefficient for p-polarized light.
+            - t_p: The transmission coefficient for p-polarized light.
+    """
+
+    # Calculate the reflection coefficient for p-polarized light (r_p)
+    # This equation is based on the Fresnel equations for p-polarization, where 
+    # r_p is the ratio of the reflected and incident electric field amplitudes for p-polarized light.
+    r_p = ((_second_layer_n * jnp.cos(_first_layer_theta) - _first_layer_n * jnp.cos(_second_layer_theta)) /
+           (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
+
+    # Calculate the transmission coefficient for p-polarized light (t_p)
+    # This equation is also derived from the Fresnel equations for p-polarization.
+    # t_p represents the ratio of the transmitted and incident electric field amplitudes.
+    t_p = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
+           (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
+
+    # Return the reflection and transmission coefficients as a tuple of jnp arrays
+    # Both r_p and t_p are essential for understanding how light interacts with different layers.
+    return jnp.array([r_p, t_p])
+
+
+def _compute_rt_at_interface_s(carry, concatenated_nk_list_theta):
+    """
+    This function calculates the reflection (r) and transmission (t) coefficients 
+    for s-polarization at the interface between two layers in a multilayer thin-film system. 
+    It uses the Fresnel equations for s-polarized light. The function is designed to be used 
+    in a JAX `lax.scan` loop, where it processes each interface iteratively.
+    
+    Args:
+        carry: A tuple containing the index (carry_idx) and a matrix (carry_values) 
+               where the reflection and transmission coefficients will be stored.
+               - carry_idx (int): The current index, indicating which layer interface is being processed.
+               - carry_values (array): An array to store the r,t coefficients for each interface.
+        
+        concatenated_nk_list_theta: A tuple containing two arrays:
+               - stacked_nk_list (array): The refractive indices (n) of two consecutive layers at the interface.
+               - stacked_layer_angles (array): The angles of incidence for the two consecutive layers.
+
+    Returns:
+        A tuple of:
+            - Updated carry: The new index and updated matrix with the calculated r,t coefficients.
+            - None: Required to match the JAX `lax.scan` interface, where a second argument is expected.
+    """
+
+    # Unpack the concatenated list into refractive index list and angle list
+    stacked_nk_list, stacked_layer_angles = concatenated_nk_list_theta
+    # `stacked_nk_list`: contains the refractive indices of two consecutive layers at the interface
+    # `stacked_layer_angles`: contains the angles of incidence for these two layers
+
+    # Unpack the carry tuple
+    carry_idx, carry_values = carry
+    # `carry_idx`: current index in the process, starts from 0 and iterates over layer interfaces
+    # `carry_values`: the array that stores the reflection and transmission coefficients
+
+    # Compute the reflection and transmission coefficients using the Fresnel equations for s-polarization
+    r_t_matrix = _fresnel_s(_first_layer_theta=stacked_layer_angles[0],   # Incident angle of the first layer
+                            _second_layer_theta=stacked_layer_angles[1],  # Incident angle of the second layer
+                            _first_layer_n=stacked_nk_list[0],            # Refractive index of the first layer
+                            _second_layer_n=stacked_nk_list[1])           # Refractive index of the second layer
+    # This line computes r and t coefficients between two consecutive layers 
+    # based on their refractive indices and angles of incidence.
+
+    # Store the computed r,t matrix in the `carry_values` array at the current index
+    carry_values = carry_values.at[carry_idx, :].set(r_t_matrix)  # Set r,t coefficients at the current index
+    # The `carry_values.at[carry_idx, :].set(r_t_matrix)` updates the array at position `carry_idx` 
+    # with the computed r,t coefficients.
+
+    carry_idx = carry_idx + 1  # Move to the next index for the next iteration
+    # The carry index is incremented to process the next layer interface in subsequent iterations.
+
+    # Return the updated carry (with new index and r,t coefficients) and None for lax.scan compatibility
+    return (carry_idx, carry_values), None
+
+
+def _compute_rt_at_interface_p(carry, concatenated_nk_list_theta):
+    """
+    This function computes the reflection and transmission (r, t) coefficients at the interface between two layers
+    for P-polarized light (parallel polarization). It uses the Fresnel equations to calculate these coefficients 
+    based on the refractive indices and angles of incidence and refraction for the two layers.
+
+    Args:
+        carry: A tuple (carry_idx, carry_values) where:
+            - carry_idx: The current index that keeps track of the layer.
+            - carry_values: A matrix to store the computed reflection and transmission coefficients.
+        
+        concatenated_nk_list_theta: A tuple (stacked_nk_list, stacked_layer_angles) where:
+            - stacked_nk_list: A list of refractive indices of the two consecutive layers.
+            - stacked_layer_angles: A list of angles of incidence and refraction at the interface between the layers.
+
+    Returns:
+        A tuple:
+            - Updated carry containing:
+                - carry_idx incremented by 1.
+                - carry_values with the newly computed r, t coefficients at the current interface.
+            - None (This is used to maintain the structure of a functional-style loop but has no further use).
+    """
+
+    # Unpack the concatenated data into two variables: refractive indices (nk) and angles (theta)
+    stacked_nk_list, stacked_layer_angles = concatenated_nk_list_theta  # Extract the refractive indices and angles from the input tuple
+    carry_idx, carry_values = carry  # Unpack carry: carry_idx is the current index, carry_values stores r and t coefficients
+
+    # Compute reflection (r) and transmission (t) coefficients at the interface using Fresnel equations for P-polarized light
+    r_t_matrix = _fresnel_p(_first_layer_theta = stacked_layer_angles[0],  # Incident angle at the first layer
+                              _second_layer_theta = stacked_layer_angles[1],  # Refraction angle at the second layer
+                              _first_layer_n = stacked_nk_list[0],  # Refractive index of the first layer
+                              _second_layer_n = stacked_nk_list[1])  # Refractive index of the second layer
+
+    # Update carry_values by setting the r,t matrix at the current index (carry_idx)
+    carry_values = carry_values.at[carry_idx, :].set(r_t_matrix)  # Store the computed r,t matrix into the carry_values at the index 'carry_idx'
+
+    carry_idx = carry_idx + 1  # Move to the next index for further iterations
+    return (carry_idx, carry_values), None  # Return the updated carry with incremented index and updated r,t values, and None as a placeholder
+
+def _compute_rt_one_wl(nk_list: jnp.ndarray, layer_angles: jnp.ndarray,
+                       wavelength: Union[float, jnp.ndarray], polarization: bool) -> jnp.ndarray:
+    """
+    Computes the reflectance and transmittance for a single wavelength 
+    across multiple layers in a stack of materials. The computation 
+    takes into account the refractive index of each layer, the angle of 
+    incidence in each layer, the wavelength of the light, and the 
+    polarization of the light.
+
+    Args:
+        nk_list (jnp.ndarray): Array of complex refractive indices for each layer. 
+                               The shape should be (num_layers,).
+        layer_angles (jnp.ndarray): Array of angles of incidence for each layer. 
+                                    The shape should be (num_layers,).
+        wavelength (float or jnp.ndarray): The wavelength of light, given as either 
+                                           a scalar or a JAX array.
+        polarization (bool): Boolean flag that determines the polarization state of the light. 
+                             If False, s-polarization is used; if True, p-polarization is used.
+
+    Returns:
+        jnp.ndarray: A 1D JAX array representing the reflectance and transmittance 
+                     coefficients at the specified wavelength and polarization.
+    """
+
+    # Initialize the state for `jax.lax.scan`. The first element (0) is a placeholder 
+    # and won't be used. The second element is a 2D array of zeros to hold intermediate 
+    # results, representing the reflectance and transmittance across layers.
+    init_state = (0, jnp.zeros((len(nk_list) - 2, 2), dtype=jnp.float32))  # Initial state with an array of zeros
+    # The shape of `jnp.zeros` is (num_layers - 2, 2) because we exclude the first 
+    # and last layers, assuming they are boundary layers.
+
+    # Stack the refractive indices (`nk_list`) for each adjacent pair of layers.
+    # This creates a new array where each element contains a pair of adjacent refractive indices 
+    # from `nk_list`, which will be used to compute the reflection and transmission at the interface 
+    # between these two layers.
+    stacked_nk_list = jnp.stack([nk_list[:-2], nk_list[1:-1]], axis=1)  # Stack the original and shifted inputs for processing in pairs
+    # For example, if `nk_list` is [n1, n2, n3, n4], this will create pairs [(n1, n2), (n2, n3), (n3, n4)].
+
+    # Similarly, stack the angles for adjacent layers.
+    # The same logic applies to `layer_angles` as for `nk_list`. Each pair of adjacent layers 
+    # will have an associated pair of angles.
+    stacked_layer_angles = jnp.stack([layer_angles[:-2], layer_angles[1:-1]], axis=1)
+    # This operation aligns the angles with the corresponding refractive indices.
+
+    # Now we need to compute reflectance and transmittance for each interface. 
+    # This can be done using `jax.lax.scan`, which efficiently loops over the stacked pairs 
+    # of refractive indices and angles.
+
+    # If the light is s-polarized (polarization = False), we call the function `_compute_rt_at_interface_s`.
+    # This function calculates the reflection and transmission coefficients specifically for s-polarized light.
+    if polarization == False:
+        rt_one_wl, _ = jax.lax.scan(_compute_rt_at_interface_s, init_state, (stacked_nk_list, stacked_layer_angles))  # s-polarization case
+        # `jax.lax.scan` applies the function `_compute_rt_at_interface_s` to each pair of adjacent layers 
+        # along with the corresponding angles. It processes this in a loop, accumulating the results.
+
+    # If the light is p-polarized (polarization = True), we use `_compute_rt_at_interface_p` instead.
+    # This function handles p-polarized light.
+    elif polarization == True:
+        rt_one_wl, _ = jax.lax.scan(_compute_rt_at_interface_p, init_state, (stacked_nk_list, stacked_layer_angles))  # p-polarization case
+        # The same process as above but with a function specific to p-polarized light.
+
+    # Finally, return the computed reflectance and transmittance coefficients. 
+    # The result is stored in `rt_one_wl[1]` (the second element of `rt_one_wl`), which corresponds 
+    # to the reflectance and transmittance after all layers have been processed.
+    return rt_one_wl[1]  # Return a 1D theta array for each layer
+    # This output is the desired result: the reflectance and transmittance for the given wavelength.
+
+
 class Stack:
     """
     Stack class to simulate multilayer thin films using the Transfer Matrix Method (TMM).
@@ -232,25 +474,23 @@ class Stack:
     def _fresnel_s(self, _first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
                    _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
-        Compute the Fresnel reflection and transmission coefficients for s-polarized light.
+        This function calculates the Fresnel reflection (r_s) and transmission (t_s) coefficients 
+        for s-polarized light (electric field perpendicular to the plane of incidence) at the interface 
+        between two materials. The inputs are the refractive indices and the angles of incidence and 
+        refraction for the two layers.
     
-        This function calculates the reflection and transmission coefficients for s-polarized light, where
-        the electric field is perpendicular to the plane of incidence. The coefficients are computed based
-        on the Fresnel equations, which describe the behavior of electromagnetic waves at the interface between
-        two media with different refractive indices (n&k).
-    
-        Parameters:
-        - _first_layer_n (Union[float, jnp.ndarray]): The refractive index of the first medium. This can be
-          either a scalar or an array, allowing for flexible and vectorized operations.
-        - _second_layer_n (Union[float, jnp.ndarray]): The refractive index of the second medium. This can
-          also be a scalar or an array, consistent with the first layer's refractive index.
-        - _first_layer_theta (Union[float, jnp.ndarray]): The angle of incidence in the first medium, provided
-          as either a scalar or an array.
-        - _second_layer_theta (Union[float, jnp.ndarray]): The angle of refraction in the second medium, given
-          as either a scalar or an array.
+        Args:
+            _first_layer_n (Union[float, jnp.ndarray]): Refractive index of the first layer (incident medium). 
+                Can be a float or an array if computing for multiple incident angles/materials.
+            _second_layer_n (Union[float, jnp.ndarray]): Refractive index of the second layer (transmitted medium). 
+                Similar to the first argument, this can also be a float or an array.
+            _first_layer_theta (Union[float, jnp.ndarray]): Angle of incidence in the first layer (in radians). 
+                Can be a float or an array.
+            _second_layer_theta (Union[float, jnp.ndarray]): Angle of refraction in the second layer (in radians). 
+                Can be a float or an array.
     
         Returns:
-        - Tuple[jnp.ndarray, jnp.ndarray]: A tuple containing:
+        - Array[jnp.ndarray, jnp.ndarray]: A jax array containing:
             - _r_s (jnp.ndarray): The Fresnel reflection coefficient for s-polarized light, representing the ratio
               of the reflected electric field amplitude to the incident electric field amplitude.
             - _t_s (jnp.ndarray): The Fresnel transmission coefficient for s-polarized light, representing the ratio
@@ -266,32 +506,37 @@ class Stack:
           _t_s = ( 2 * n_i cos \theta_i) / (n_i cos \theta_i + n_i+1 cos \theta_i+1)
         
         """
-        _r_s = ((_first_layer_n * jnp.cos(_first_layer_theta) - _second_layer_n * jnp.cos(_second_layer_theta)) /
-                (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
-        _t_s = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
-                (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
-        return _r_s, _t_s
+        # Calculate the reflection coefficient for s-polarized light using Fresnel's equations.
+        # The formula: r_s = (n1 * cos(theta1) - n2 * cos(theta2)) / (n1 * cos(theta1) + n2 * cos(theta2))
+        # This measures how much of the light is reflected at the interface.
+        r_s = ((_first_layer_n * jnp.cos(_first_layer_theta) - _second_layer_n * jnp.cos(_second_layer_theta)) /
+               (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
+        
+        # Calculate the transmission coefficient for s-polarized light using Fresnel's equations.
+        # The formula: t_s = 2 * n1 * cos(theta1) / (n1 * cos(theta1) + n2 * cos(theta2))
+        # This measures how much of the light is transmitted through the interface.
+        t_s = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
+               (_first_layer_n * jnp.cos(_first_layer_theta) + _second_layer_n * jnp.cos(_second_layer_theta)))
+        
+        # Return the reflection and transmission coefficients as a JAX array
+        return jnp.array([r_s, t_s])
     
     def _fresnel_p(self, _first_layer_n: Union[float, jnp.ndarray], _second_layer_n: Union[float, jnp.ndarray],
                    _first_layer_theta: Union[float, jnp.ndarray], _second_layer_theta: Union[float, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
-        This function computes the reflection and transmission coefficients for light polarized with the
-        electric field parallel to the plane of incidence (p-polarization). The coefficients are derived
-        from the Fresnel equations, which describe the interaction of electromagnetic waves with an interface
-        between two media with different refractive indices (n&k).
+        This function calculates the Fresnel reflection (r_p) and transmission (t_p) coefficients 
+        for p-polarized light at the interface between two different media. It uses the refractive indices
+        of the two media (_first_layer_n and _second_layer_n) and the incident and transmitted angles
+        (_first_layer_theta and _second_layer_theta) to compute these values.
     
-        Parameters:
-        - _first_layer_n (Union[float, jnp.ndarray]): The refractive index of the first medium. This parameter
-          can be a single scalar value or a JAX array, allowing for operations on multiple values simultaneously.
-        - _second_layer_n (Union[float, jnp.ndarray]): The refractive index of the second medium, provided as
-          either a scalar or an array.
-        - _first_layer_theta (Union[float, jnp.ndarray]): The angle of incidence in the first medium. Can be
-          a scalar or an array of angles.
-        - _second_layer_theta (Union[float, jnp.ndarray]): The angle of refraction in the second medium. This
-          can also be provided as a scalar or an array.
+        Args:
+            _first_layer_n: Refractive index of the first medium (can be float or ndarray).
+            _second_layer_n: Refractive index of the second medium (can be float or ndarray).
+            _first_layer_theta: Incident angle (in radians) in the first medium (can be float or ndarray).
+            _second_layer_theta: Transmitted angle (in radians) in the second medium (can be float or ndarray).
     
         Returns:
-        - Tuple[jnp.ndarray, jnp.ndarray]: A tuple containing:
+        - Array[jnp.ndarray, jnp.ndarray]: A jax array containing:
           - _r_p (jnp.ndarray): The Fresnel reflection coefficient for p-polarized light. This coefficient
             represents the fraction of the incident light that is reflected at the interface between the two
             media.
@@ -306,171 +551,202 @@ class Stack:
           _t_p = ( 2 * n_i cos \theta_i) / (n_i+1 cos \theta_i + n_i cos \theta_i+1)
           
         """
-        _r_p = ((_second_layer_n * jnp.cos(_first_layer_theta) - _first_layer_n * jnp.cos(_second_layer_theta)) /
-                (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
-        _t_p = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
-                (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
-        return _r_p, _t_p
+        # Calculate the reflection coefficient for p-polarized light (r_p)
+        # This equation is based on the Fresnel equations for p-polarization, where 
+        # r_p is the ratio of the reflected and incident electric field amplitudes for p-polarized light.
+        r_p = ((_second_layer_n * jnp.cos(_first_layer_theta) - _first_layer_n * jnp.cos(_second_layer_theta)) /
+               (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
     
-    def _interface(self,
-        _any_incoherent: bool,
-        _polarization: bool,
-        _first_layer_theta: Union[float, jnp.ndarray],
-        _second_layer_theta: Union[float, jnp.ndarray],
-        _first_layer_n: Union[float, jnp.ndarray],
-        _second_layer_n: Union[float, jnp.ndarray]
-    ) -> Union[jnp.ndarray, Tuple[float, float]]:
+        # Calculate the transmission coefficient for p-polarized light (t_p)
+        # This equation is also derived from the Fresnel equations for p-polarization.
+        # t_p represents the ratio of the transmitted and incident electric field amplitudes.
+        t_p = (2 * _first_layer_n * jnp.cos(_first_layer_theta) /
+               (_second_layer_n * jnp.cos(_first_layer_theta) + _first_layer_n * jnp.cos(_second_layer_theta)))
+    
+        # Return the reflection and transmission coefficients as a tuple of jnp arrays
+        # Both r_p and t_p are essential for understanding how light interacts with different layers.
+        return jnp.array([r_p, t_p])
+    
+    # def _interface(self,
+    #     _any_incoherent: bool,
+    #     _polarization: bool,
+    #     _first_layer_theta: Union[float, jnp.ndarray],
+    #     _second_layer_theta: Union[float, jnp.ndarray],
+    #     _first_layer_n: Union[float, jnp.ndarray],
+    #     _second_layer_n: Union[float, jnp.ndarray]
+    # ) -> Union[jnp.ndarray, Tuple[float, float]]:
+    #     """
+    #     Calculate reflectance and transmittance at the interface between two layers
+    #     using Fresnel equations, considering the polarization of light and whether
+    #     the layers are coherent or incoherent.
+    
+    #     Parameters
+    #     ----------
+    #     _any_incoherent : bool
+    #         Flag indicating if any of the layers at the boundary are incoherent.
+    #         - False: Both boundaries are coherent.
+    #         - True: At least one boundary is incoherent.
+        
+    #     _polarization : Optional[bool]
+    #         Polarization state of the incoming light.
+    #         - None: Both s and p polarizations (unpolarized light).
+    #         - False: s-polarization.
+    #         - True: p-polarization.
+        
+    #     _first_layer_theta : Union[float, jnp.ndarray]
+    #         Angle of incidence with respect to the normal at the boundary of the first layer.
+        
+    #     _second_layer_theta : Union[float, jnp.ndarray]
+    #         Angle of refraction with respect to the normal at the boundary of the second layer.
+        
+    #     _first_layer_n : Union[float, jnp.ndarray]
+    #         Refractive index of the first layer.
+        
+    #     _second_layer_n : Union[float, jnp.ndarray]
+    #         Refractive index of the second layer.
+        
+    #     Returns
+    #     -------
+    #     Union[jnp.ndarray, Tuple[float, float]]
+    #         - If polarization is None (both s and p), return a 2x2 matrix:
+    #           - Coherent: [[r_s, r_p], [t_s, t_p]]
+    #           - Incoherent: [[R_s, R_p], [T_s, T_p]]
+    #         - If polarization is False, return a vector [r_s, t_s] or [R_s, T_s].
+    #         - If polarization is True, return a vector [r_p, t_p] or [R_p, T_p].
+    #     """
+    #     # Handle the incoherent case
+    #     if _any_incoherent:
+    #         if _polarization is None:
+    #             # Unpolarized light: both s and p polarizations
+    #             _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             _R_s = jnp.abs(_r_s) ** 2
+    #             _T_s = jnp.abs(_t_s) ** 2
+    #             _R_p = jnp.abs(_r_p) ** 2
+    #             _T_p = jnp.abs(_t_p) ** 2
+    #             return jnp.array([[_R_s, _R_p], [_T_s, _T_p]])
+    #         elif _polarization is False:
+    #             _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             _R_s = jnp.abs(_r_s) ** 2
+    #             _T_s = jnp.abs(_t_s) ** 2
+    #             return jnp.array([_R_s, _T_s])
+    #         elif _polarization is True:
+    #             _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             _R_p = jnp.abs(_r_p) ** 2
+    #             _T_p = jnp.abs(_t_p) ** 2
+    #             return jnp.array([_R_p, _T_p])
+    
+    #     # Handle the coherent case
+    #     else:
+    #         if _polarization is None:
+    #             # Unpolarized light: both s and p polarizations
+    #             _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             return jnp.array([[_r_s, _t_s], [_r_p, _t_p]])
+    #         elif _polarization is False:
+    #             _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             return jnp.array([_r_s, _t_s])
+    #         elif _polarization is True:
+    #             _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
+    #             return jnp.array([_r_p, _t_p])
+
+
+
+    def _compute_rt_one_wl(self,
+                           angle_index: Union[int, jnp.ndarray],
+                           wavelength_index: Union[int, jnp.ndarray],
+                           wavelength: Union[float, jnp.ndarray], 
+                           polarization: bool) -> jnp.ndarray:
         """
-        Calculate reflectance and transmittance at the interface between two layers
-        using Fresnel equations, considering the polarization of light and whether
-        the layers are coherent or incoherent.
+        Computes the reflectance and transmittance for a single wavelength 
+        across multiple layers in a stack of materials. The computation 
+        takes into account the refractive index of each layer, the angle of 
+        incidence in each layer, the wavelength of the light, and the 
+        polarization of the light.
     
-        Parameters
-        ----------
-        _any_incoherent : bool
-            Flag indicating if any of the layers at the boundary are incoherent.
-            - False: Both boundaries are coherent.
-            - True: At least one boundary is incoherent.
-        
-        _polarization : Optional[bool]
-            Polarization state of the incoming light.
-            - None: Both s and p polarizations (unpolarized light).
-            - False: s-polarization.
-            - True: p-polarization.
-        
-        _first_layer_theta : Union[float, jnp.ndarray]
-            Angle of incidence with respect to the normal at the boundary of the first layer.
-        
-        _second_layer_theta : Union[float, jnp.ndarray]
-            Angle of refraction with respect to the normal at the boundary of the second layer.
-        
-        _first_layer_n : Union[float, jnp.ndarray]
-            Refractive index of the first layer.
-        
-        _second_layer_n : Union[float, jnp.ndarray]
-            Refractive index of the second layer.
-        
-        Returns
-        -------
-        Union[jnp.ndarray, Tuple[float, float]]
-            - If polarization is None (both s and p), return a 2x2 matrix:
-              - Coherent: [[r_s, r_p], [t_s, t_p]]
-              - Incoherent: [[R_s, R_p], [T_s, T_p]]
-            - If polarization is False, return a vector [r_s, t_s] or [R_s, T_s].
-            - If polarization is True, return a vector [r_p, t_p] or [R_p, T_p].
+        Args:
+            wavelength (float or jnp.ndarray): The wavelength of light, given as either 
+                                               a scalar or a JAX array.
+            polarization (bool): Boolean flag that determines the polarization state of the light. 
+                                 If False, s-polarization is used; if True, p-polarization is used.
+    
+        Returns:
+            jnp.ndarray: A 1D JAX array representing the reflectance and transmittance 
+                         coefficients at the specified wavelength and polarization.
         """
-        # Handle the incoherent case
-        if _any_incoherent:
-            if _polarization is None:
-                # Unpolarized light: both s and p polarizations
-                _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                _R_s = jnp.abs(_r_s) ** 2
-                _T_s = jnp.abs(_t_s) ** 2
-                _R_p = jnp.abs(_r_p) ** 2
-                _T_p = jnp.abs(_t_p) ** 2
-                return jnp.array([[_R_s, _R_p], [_T_s, _T_p]])
-            elif _polarization is False:
-                _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                _R_s = jnp.abs(_r_s) ** 2
-                _T_s = jnp.abs(_t_s) ** 2
-                return jnp.array([_R_s, _T_s])
-            elif _polarization is True:
-                _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                _R_p = jnp.abs(_r_p) ** 2
-                _T_p = jnp.abs(_t_p) ** 2
-                return jnp.array([_R_p, _T_p])
-    
-        # Handle the coherent case
-        else:
-            if _polarization is None:
-                # Unpolarized light: both s and p polarizations
-                _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                return jnp.array([[_r_s, _t_s], [_r_p, _t_p]])
-            elif _polarization is False:
-                _r_s, _t_s = self._fresnel_s(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                return jnp.array([_r_s, _t_s])
-            elif _polarization is True:
-                _r_p, _t_p = self._fresnel_p(_first_layer_n, _second_layer_n, _first_layer_theta, _second_layer_theta)
-                return jnp.array([_r_p, _t_p])
-
-    def _compute_rt_at_interface(self, carry, concatenated_nk_list_theta):
-        concatenated_nk_list, theta = concatenated_nk_list_theta
-        carry_idx, carry_values = carry
-        
-        # Compute r,t
-        r_t_matrix = self._interface(_any_incoherent = self._any_incoherent,_polarization = self._polarization,
-                                _first_layer_theta = theta[0] ,
-                                _second_layer_theta = theta[1],
-                                _first_layer_n = concatenated_nk_list[0],
-                                _second_layer_n = concatenated_nk_list[1])
-        
-        carry_values = carry_values.at[carry_idx, :].set(r_t_matrix)
-        
-        carry_idx = carry_idx + 1  # Move to the next index
-        return (carry_idx, carry_values), None
-
-    def _compute_rt_one_wl(self, nk_list: jnp.ndarray, theta_index: Union[int, jnp.ndarray], 
-                           wavelength_index: Union[int, jnp.ndarray], wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
-        incoming_medium = jnp.expand_dims(self._incoming_medium(wavelength[wavelength_index]), axis=0)
-        nk_values = nk_list[wavelength_index, :]
-        outgoing_medium = jnp.expand_dims(self.outgoing_medium(wavelength[wavelength_index]), axis=0)
-
-        concatenated_nk_list = jnp.concatenate([incoming_medium, nk_values, outgoing_medium], axis=0)
-
-        #concatenated_nk_list = jnp.concatenate([self._incoming_medium(wavelength[wavelength_index]), nk_list[wavelength_index, :], self.outgoing_medium(wavelength[wavelength_index])])
-        if self._polarization == None:
-            init_state = (0, jnp.zeros((len(nk_values)+1, 2, 2), dtype=jnp.float32))  # Initial state with an array of zeros
-        else:
-            init_state = (0, jnp.zeros((len(nk_values)+1, 2), dtype=jnp.float32))  # Initial state with an array of zeros
-        
-        # Create shifted versions of inputs1 and inputs2 with an extra zero at the end
-        padded_concatenated_nk_list = jnp.pad(concatenated_nk_list, (0, 1), constant_values=0)
-        print(padded_concatenated_nk_list.shape)
-        padded_theta = jnp.pad(self._layer_angles[theta_index, wavelength_index, :], (0, 1), constant_values=0)
-        print(padded_concatenated_nk_list.shape)
-        # Stack the original and shifted inputs for processing in pairs
-        stacked_nk_list = jnp.stack([concatenated_nk_list, padded_concatenated_nk_list[1:]], axis=1)
-        stacked_theta = jnp.stack([self._layer_angles[theta_index, wavelength_index, :], padded_theta[1:]], axis=1)        
-        print(stacked_nk_list.shape)
-        print(stacked_theta.shape)
-        # Use jax.lax.scan to iterate over inputs1 and inputs2
-        #rt_one_wl, _ = jax.lax.scan(lambda carry, ntheta: self._compute_rt_at_interface(carry, ntheta[0], ntheta[1]),
-        #                          init_state, (stacked_nk_list, stacked_theta))        
-
-        # Now use this function in `jax.lax.scan`
-        rt_one_wl, _ = jax.lax.scan(self._compute_rt_at_interface, init_state, (stacked_nk_list, stacked_theta))
-
-
-        # Return a 1D theta array for each layer
-        return rt_one_wl[1]
-    
-    def _compute_rt(self, nk_functions: Dict[int, Callable],
-                   material_distribution: List[int], 
-                   initial_theta: Union[float, jnp.ndarray], 
-                   wavelength: Union[float, jnp.ndarray]) -> jnp.ndarray:
- 
         
         # Create a function that retrieves the refractive indices for each material in the distribution
         def get_nk_values(wl):
             # For each material in the distribution, call the corresponding nk function with the given wavelength
-            return jnp.array([nk_functions[mat_idx](wl) for mat_idx in material_distribution])
+            return jnp.array([self._nk_funcs[mat_idx](wl) for mat_idx in self._material_distribution])
     
-        # Use vmap to vectorize the get_nk_values function over the wavelength dimension
-        # This will return a 2D array where each row corresponds to the refractive indices at a given wavelength
-        nk_list_2d = vmap(get_nk_values)(wavelength)
-        _theta_indices = jnp.arange(0,jnp.size(initial_theta), dtype = int) # Array or single value for the indices of angle of incidence
-        _wavelength_indices = jnp.arange(0,jnp.size(wavelength), dtype = int) # Array or single value for  the indices of wavelength
+
+        nk_list = vmap(get_nk_values)(wavelength)
+        layer_angles = self._layer_angles[angle_index, wavelength_index, :]
+
+        # Initialize the state for `jax.lax.scan`. The first element (0) is a placeholder 
+        # and won't be used. The second element is a 2D array of zeros to hold intermediate 
+        # results, representing the reflectance and transmittance across layers.
+        init_state = (0, jnp.zeros((len(nk_list) - 2, 2), dtype=jnp.float32))  # Initial state with an array of zeros
+        # The shape of `jnp.zeros` is (num_layers - 2, 2) because we exclude the first 
+        # and last layers, assuming they are boundary layers.
+    
+        # Stack the refractive indices (`nk_list`) for each adjacent pair of layers.
+        # This creates a new array where each element contains a pair of adjacent refractive indices 
+        # from `nk_list`, which will be used to compute the reflection and transmission at the interface 
+        # between these two layers.
+        stacked_nk_list = jnp.stack([nk_list[:-2], nk_list[1:-1]], axis=1)  # Stack the original and shifted inputs for processing in pairs
+        # For example, if `nk_list` is [n1, n2, n3, n4], this will create pairs [(n1, n2), (n2, n3), (n3, n4)].
+    
+        # Similarly, stack the angles for adjacent layers.
+        # The same logic applies to `layer_angles` as for `nk_list`. Each pair of adjacent layers 
+        # will have an associated pair of angles.
+        stacked_layer_angles = jnp.stack([layer_angles[:-2], layer_angles[1:-1]], axis=1)
+        # This operation aligns the angles with the corresponding refractive indices.
+    
+        # Now we need to compute reflectance and transmittance for each interface. 
+        # This can be done using `jax.lax.scan`, which efficiently loops over the stacked pairs 
+        # of refractive indices and angles.
+    
+        # If the light is s-polarized (polarization = False), we call the function `_compute_rt_at_interface_s`.
+        # This function calculates the reflection and transmission coefficients specifically for s-polarized light.
+        if polarization == False:
+            rt_one_wl, _ = jax.lax.scan(_compute_rt_at_interface_s, init_state, (stacked_nk_list, stacked_layer_angles))  # s-polarization case
+            # `jax.lax.scan` applies the function `_compute_rt_at_interface_s` to each pair of adjacent layers 
+            # along with the corresponding angles. It processes this in a loop, accumulating the results.
+    
+        # If the light is p-polarized (polarization = True), we use `_compute_rt_at_interface_p` instead.
+        # This function handles p-polarized light.
+        elif polarization == True:
+            rt_one_wl, _ = jax.lax.scan(_compute_rt_at_interface_p, init_state, (stacked_nk_list, stacked_layer_angles))  # p-polarization case
+            # The same process as above but with a function specific to p-polarized light.
+    
+        # Finally, return the computed reflectance and transmittance coefficients. 
+        # The result is stored in `rt_one_wl[1]` (the second element of `rt_one_wl`), which corresponds 
+        # to the reflectance and transmittance after all layers have been processed.
+        return rt_one_wl[1]  # Return a 1D theta array for each layer
+        # This output is the desired result: the reflectance and transmittance for the given wavelength.
+
+
+
+
+
+    def _compute_rt(self,
+                   wavelength: Union[float, jnp.ndarray],
+                   polarization: bool) -> jnp.ndarray:
+ 
+
+        angle_indices = jnp.arange(0,jnp.size(self._material_distribution), dtype = int) # Array or single value for the indices of angle of incidence
+        wavelength_indices = jnp.arange(0,jnp.size(wavelength), dtype = int) # Array or single value for  the indices of wavelength
         # Vectorize the _compute_layer_angles_one_wl function over the wavelength dimension (first dimension of nk_list_2d)
         # in_axes=(0, None, 0) means:
         # - The first argument (nk_list_2d) will not be vectorized
         # - The second argument (initial_theta) will be vectorized over the first dimension
-        vmap_compute_rt = vmap(vmap(self._compute_rt_one_wl, (None, None, 0, None)), (None, 0, None, None))
+        vmap_compute_rt = vmap(vmap(self._compute_rt_one_wl, (0, None, None, None)), (None, 0, None, None))
 
         # Apply the vectorized function to get the 3D array of angles
         # The resulting array has dimensions (number_of_wavelengths, number_of_init_angles, number_of_layers)
-        return vmap_compute_rt(nk_list_2d, _theta_indices, _wavelength_indices, wavelength)
+        return vmap_compute_rt(angle_indices, wavelength_indices, wavelength, polarization)
 
     # Getter for thicknesses
     @property
@@ -552,10 +828,13 @@ class Stack:
         print((self._layer_angles).shape)       
         self._kz = self._compute_kz(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
                                    initial_theta = theta, wavelength = wavelength)    
-        print((self._kz).shape) 
-        self._rt = self._compute_rt(nk_functions = self._nk_funcs, material_distribution = self._material_distribution,
-                                   initial_theta = theta, wavelength = wavelength) 
-        print((self._rt).shape)  
+        print((self._kz).shape)
+        if self._polarization is None:
+            self._rt = (self._compute_rt(wavelength = wavelength, polarization=False),
+                        self._compute_rt(wavelength = wavelength, polarization=True))
+        else:
+            self._rt = self._compute_rt(wavelength = wavelength, polarization=self._polarization)
+            
 
     # Getter for incoherency_list
     @property
@@ -782,6 +1061,7 @@ class Stack:
         header = 'layer material,thickness,coherency'
         np.savetxt(filename, data_array, delimiter=',', fmt='%s', header=header, comments='')
 
+
 def determine_coherency(thicknesses: jnp.ndarray) -> List[bool]:
     """
     Determine the incoherency of layers based on their thickness.
@@ -797,3 +1077,4 @@ def determine_coherency(thicknesses: jnp.ndarray) -> List[bool]:
     # Incoherency if the squared thickness exceeds the threshold
     incoherency_list = jnp.greater(d_squared, threshold)
     return list(incoherency_list)  # Convert the result back to a list of booleans
+
