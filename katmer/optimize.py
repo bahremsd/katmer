@@ -28,7 +28,7 @@ def optimize_thickness(optimizer, loss_func, stack, target, num_of_iter, save_lo
         opt_state: PyTree,
     ):
         loss_value, grads = eqx.filter_value_and_grad(loss_func)(model, target)
-        updates, opt_state = optim.update(
+        updates, opt_state = optimizer.update(
             grads, opt_state, eqx.filter(model, eqx.is_array)
         )
         model = eqx.apply_updates(model, updates)
@@ -79,7 +79,7 @@ def optimize_refractive_index(optimizer, loss_func, stack, experimental_data, ex
         data_idx: int,
     ):
         loss_value, grads = eqx.filter_value_and_grad(loss_func)(model, experimental_thicknesses.at[data_idx].get(), experimental_data.at[data_idx].get())
-        updates, opt_state = optim.update(
+        updates, opt_state = optimizer.update(
             grads, opt_state, eqx.filter(model, eqx.is_array)
         )
         model = eqx.apply_updates(model, updates)
