@@ -1,6 +1,2 @@
-include katmer/nk_data/*.csv
-include LICENSE
-include HISTORY.md
-include Containerfile
-graft tests
-graft katmer
+include katmer/nk_data/csv/*.csv
+include katmer/nk_data/numpy/*.npy

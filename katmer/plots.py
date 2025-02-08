@@ -161,5 +161,3 @@ def plot_layer_distribution(
         plt.show()
     
     plt.close(fig)
-
-

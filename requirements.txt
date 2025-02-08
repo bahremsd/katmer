@@ -1,5 +1,7 @@
-# This template is a low-dependency template. 
-# By default there is no requirements added here.
-# Add the requirements you need to this file.
-# or run `make init` to create this file automatically based on the template.
-# You can also run `make switch-to-poetry` to use the poetry package manager.
+jax>=0.5.0
+equinox>=0.11.11
+optax>=0.2.4
+matplotlib>=3.10.0
+numpy>=2.2.2
+pandas>=2.2.3
+scipy>=1.15.1

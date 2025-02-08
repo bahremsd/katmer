@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+title: Tmmax
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Bahrem Serhat
+    family-names: Danis
+    orcid: 'https://orcid.org/0009-0002-9880-0446'
+repository-code: 'https://github.com/bahremsd/tmmax'
+url: 'https://pypi.org/project/tmmax/'
+license: MIT
+version: 1.0.0
+date-released: '2025-02-01'

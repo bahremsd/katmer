@@ -7,7 +7,7 @@ from setuptools import find_packages, setup
 def read(*paths, **kwargs):
     """Read the contents of a text file safely.
     >>> read("katmer", "VERSION")
-    '0.1.0'
+    '0.0.1'
     >>> read("README.md")
     ...
     """
@@ -40,7 +40,10 @@ setup(
     packages=find_packages(exclude=["tests", ".github"]),
     install_requires=read_requirements("requirements.txt"),
     entry_points={
-        "console_scripts": ["project_name = project_name.__main__:main"]
+        "console_scripts": ["katmer = katmer.__main__:main"]
     },
-    extras_require={"test": read_requirements("requirements-test.txt")},
+    include_package_data=True, 
+    package_data={
+        'katmer': ['nk_data/csv/*.csv', 'nk_data/numpy/*.npy'],
+    },
 )

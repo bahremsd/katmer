@@ -1,260 +1,688 @@
-import jax
-jax.config.update('jax_enable_x64', True) # Ensure high precision (64-bit) is enabled in JAX
-from jax import vmap # Import JAX library for vectorizing coeffs
-import jax.numpy as jnp # Import JAX's version of NumPy for differentiable computations
-from typing import Union, List, Tuple
+import jax.numpy as jnp # jax's numpy library we will use for all general mathematical operations
+from jax import jit, vmap # Importing jit for JIT compilation and vmap for efficient vectorization
+from jax import Array # Type definition for JAX arrays
+from jax.typing import ArrayLike # JAX type hint for array-like objects (supports numpy, JAX arrays, etc.)
+from typing import List, Tuple, Text
 
-from .stacks import Stack
-from .light import Light
+from .angle import compute_layer_angles
+from .wavevector import compute_kz, compute_inc_layer_pass
+from .cascaded_matmul import coh_cascaded_matrix_multiplication, incoh_cascaded_matrix_multiplication, compute_first_layer_matrix_coherent, compute_first_layer_matrix_incoherent
+from .data import create_nk_list, material_distribution_to_set, create_data
+from .reflect_transmit import compute_rt, calculate_reflectance_from_coeff, calculate_transmittace_from_coeff, compute_r_t_magnitudes_incoh
 
-def _matmul(carry, phase_t_r):
+def find_coh_and_incoh_indices(coherency_list: ArrayLike):
     """
-    Multiplies two complex matrices in a sequence.
+    This function determines the coherent and incoherent layers in an optical multilayer thin-film stack.
+    It analyzes the `coherency_list` to identify consecutive coherent layers and incoherent layers,
+    returning structured information about these layers for further processing in optical simulations.
 
-    Args:
-        carry (jax.numpy.ndarray): The accumulated product of the matrices so far.
-                                   This is expected to be a 2x2 complex matrix.
-        phase_t_r (jax.numpy.ndarray): A 3-element array where:
-            - phase_t_r[0] represents the phase shift delta (a scalar).
-            - phase_t_r[1] represents the transmission coefficient t or T (a scalar).
-            - phase_t_r[2] represents the reflection coefficient r or R (a scalar).
+    Arguments:
+        coherency_list (ArrayLike): An array of integers (dtype=int32) representing the coherency states of the layers.
+                                    The array has N elements for a multilayer stack with N layers, where:
+                                    - 0 indicates a coherent layer.
+                                    - 1 indicates an incoherent layer.
 
     Returns:
-        jax.numpy.ndarray: The updated product after multiplying the carry matrix with the current matrix.
-                           This is also a 2x2 complex matrix.
-        None: A placeholder required by jax.lax.scan for compatibility.
+        1. coherent_groups (Array): A 2D array where each row specifies the start and end indices of consecutive coherent layers.
+        2. incoherent_indices (Array): A 1D array containing indices of incoherent layers.
+        3. coherency_indices (Array): A 1D array containing all coherent groups and incoherent layers, where:
+            - Positive indices correspond to incoherent layers.
+            - Negative indices correspond to coherent stacks, and their (absolute values - 1) indicate the index of the stack in coherent_groups.
+
+    Example:
+        Input: coherency_list = [0, 0, 0, 1, 0, 0, 1] for the multilayer thin film  [ Air | TiO2, SiO2, TiO2, Al2O3, SiO2, TiO2, SiO2 | Air ]
+        Output: 
+            coherent_groups = [[1, 3], [5, 6]]
+            incoherent_indices = [0, 4, 7, 8]
+            coherency_indices = [0, -1, 4, -2, 7, 8]
     """
-    # Create the diagonal phase matrix based on phase_t_r[0]
-    # This matrix introduces a phase shift based on the delta value
-    phase_matrix = jnp.array([[jnp.exp(-1j * phase_t_r[0]), 0],  # Matrix with phase shift for the first entry
-                              [0, jnp.exp(1j * phase_t_r[0])]])  # Matrix with phase shift for the second entry
 
-    # Create the matrix based on phase_t_r[1] and phase_t_r[2]
-    # This matrix incorporates the transmission and reflection coefficients
-    transmission_reflection_matrix = jnp.array([[1, phase_t_r[1]],  # Top row with transmission coefficient
-                                               [phase_t_r[1], 1]])  # Bottom row with transmission coefficient
+    # Add padding to the coherency list with a layer of 1 on both sides for incoming and outgoing incoherent mediums
+    padded_coherency_list = jnp.pad(coherency_list, pad_width=(1, 1), constant_values=1)
 
-    # Compute the current matrix by multiplying the phase_matrix with the transmission_reflection_matrix
-    # The multiplication is scaled by 1/phase_t_r[2] to account for the reflection coefficient
-    mat = jnp.array(1 / phase_t_r[2]) * jnp.dot(phase_matrix, transmission_reflection_matrix)
+    # Compute the binary changes in the padded list to find transitions between 0 and 1
+    changes = jnp.diff(padded_coherency_list, prepend=1 - padded_coherency_list[0])
 
-    # Multiply the accumulated carry matrix with the current matrix
-    # This updates the product with the new matrix
-    result = jnp.dot(carry, mat)
+    # Find the start indices of coherent groups (where changes equal -1)
+    start_indices = jnp.where(changes == -1)[0]
 
-    return result, None  # Return the updated matrix and None as a placeholder for jax.lax.scan
+    # Find the end indices of coherent groups (where changes equal 1, adjusted by -1)
+    end_indices = jnp.where(changes == 1)[0] - 1
 
-def _cascaded_matrix_multiplication(phases_ts_rs: jnp.ndarray) -> jnp.ndarray:
+    # Remove the first element of end_indices to handle padding adjustments
+    end_indices = jnp.delete(end_indices, 0)
+
+    # Combine start and end indices to form coherent groups
+    coherent_groups = jnp.stack([start_indices, end_indices], axis=1)
+
+    # Identify indices of incoherent layers (where value is 1 in the padded list)
+    incoherent_indices = jnp.where(padded_coherency_list == 1)[0]
+
+    # Initialize coherency_indices with all incoherent layer indices
+    coherency_indices = jnp.where(padded_coherency_list == 1)[0]
+
+    # Insert coherent group leading indices into coherency_indices
+    for idx, group in enumerate(coherent_groups):
+        # Get the starting index of the current coherent group
+        leading_index = group[0]
+
+        # Find the position to insert the negative index in coherency_indices
+        insertion_idx = jnp.searchsorted(coherency_indices, leading_index)
+
+        # Insert the negative index corresponding to the current coherent group
+        coherency_indices = jnp.insert(coherency_indices, insertion_idx, -idx - 1)
+
+        # Remove the duplicated entry after insertion (adjusted by insertion_idx)
+        coherency_indices = jnp.delete(coherency_indices, insertion_idx - 1)
+
+    # Return the coherent groups, incoherent indices, and combined coherency indices
+    return coherent_groups, incoherent_indices, coherency_indices
+
+def tmm_coh_single_wl_angle_point(data: ArrayLike,
+                                  material_distribution: ArrayLike,
+                                  thickness_list: ArrayLike,
+                                  wavelength: ArrayLike,
+                                  angle_of_incidence: ArrayLike,
+                                  polarization: ArrayLike) -> Array:
     """
-    Performs cascaded matrix multiplication on a sequence of complex matrices using scan.
+    This function implements the Transfer Matrix Method (TMM) to compute the reflectance (R) 
+    and transmittance (T) of a coherent multilayer thin-film structure for a given wavelength, 
+    angle of incidence, and polarization.
 
-    Args:
-        phases_ts_rs (jax.numpy.ndarray): An array of shape [N, 2, 2], where N is the number of 2x2 complex matrices.
-                                          Each 2x2 matrix is represented by its 2x2 elements arranged in a 3D array.
+    Arguments:
+    ----------
+    data: ArrayLike
+        A 2D array where each row corresponds to the refractive index (n) and extinction 
+        coefficient (k) data of a specific material. The first axis length is the number of 
+        materials, and the second axis is the length of the nk vs wavelength data for each 
+        material.
+
+    material_distribution: ArrayLike
+        An array of integers specifying the material index for each layer in the multilayer 
+        structure, including the incoming and outgoing medium. Its length is N + 2, where 
+        N is the number of thin-film layers.
+
+    thickness_list: ArrayLike
+        A 1D array of floats representing the physical thickness of each thin-film layer. 
+        Its length is N, corresponding to the N layers in the multilayer structure.
+
+    wavelength: ArrayLike
+        The wavelength of the light wave (in the same units as the nk data). This is used 
+        to calculate the optical properties for the specific wavelength.
+
+    angle_of_incidence: ArrayLike
+        The angle (in radians) of the incoming light with respect to the normal of the 
+        multilayer thin-film surface.
+
+    polarization: ArrayLike
+        Specifies the polarization state of the light wave. If `False`, the light is 
+        s-polarized (E field is perpendicular to the plane of incidence), and if `True`, 
+        it is p-polarized (E field is parallel to the plane of incidence).
 
     Returns:
-        jax.numpy.ndarray: The final result of multiplying all the matrices together in sequence.
-                           This result is a single 2x2 complex matrix representing the accumulated product of all input matrices.
-    """
-    initial_value = jnp.eye(2, dtype=jnp.complex128)  
-    # Initialize with the identity matrix of size 2x2. # The identity matrix acts as the multiplicative identity, 
-    # ensuring that the multiplication starts correctly.
-
-    # jax.lax.scan applies a function across the sequence of matrices. 
-    #Here, _matmul is the function applied, starting with the identity matrix.
-    # `result` will hold the final matrix after processing all input matrices.
-    result, _ = jax.lax.scan(_matmul, initial_value, phases_ts_rs)  # Scan function accumulates results of _matmul over the matrices.
-
-    return result  # Return the final accumulated matrix product. # The result is the product of all input matrices in the given sequence.
-
-
-def _create_phases_ts_rs(_trs: jnp.ndarray, _phases: jnp.ndarray) -> jnp.ndarray:
-    """
-    Create a new array combining phase and ts values.
-
-    Args:
-        _trs (jnp.ndarray): A 2D array of shape (N, 2) where N is the number of elements. 
-                            Each element is a pair of values [t, s].
-        _phases (jnp.ndarray): A 1D array of shape (N,) containing phase values for each element.
-
-    Returns:
-        jnp.ndarray: A 2D array of shape (N, 3) where each row is [phase, t, s].
-                     The phase is from _phases, and t, s are from _trs.
+    --------
+    Tuple of two scalars:
+        R: Reflectance (a value between 0 and 1, representing the ratio of reflected power 
+           to incident power).
+        T: Transmittance (a value between 0 and 1, representing the ratio of transmitted 
+           power to incident power).
     """
 
-    N = _phases.shape[0]  # Get the number of elements (N) in the _phases array
-
-    def process_element(i: int) -> List[float]:
-        """
-        Process an individual element to create a list of phase and ts values.
-
-        Args:
-            i (int): Index of the element to process.
-
-        Returns:
-            List[float]: A list containing [phase, t, s] where:
-                - phase: The phase value from _phases at index i
-                - t: The first value of the pair in _trs at index i
-                - s: The second value of the pair in _trs at index i
-        """
-        return [_phases[i], _trs[i][0], _trs[i][1]]  # Return the phase and ts values as a list
-
-    # Apply process_element function across all indices from 0 to N-1
-    result = jax.vmap(process_element)(jnp.arange(N))  # jax.vmap vectorizes the process_element function
-                                                    # to apply it across all indices efficiently
+    # Create a list of refractive indices and extinction coefficients for each layer 
+    # at the given wavelength using the provided material distribution.
+    nk_list = create_nk_list(material_distribution, data, wavelength)
     
-    return result  # Return the result as a 2D array of shape (N, 3)
-
-
-def _tmm(stack: Stack, light: Light,
-         theta_index: Union[int, jnp.ndarray],
-         wavelength_index: Union[int, jnp.ndarray]
-        ) -> Union[
-            Tuple[jnp.ndarray, jnp.ndarray],
-            Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
-            Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
-            Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
-
-    """
-    The _tmm function computes optical properties such as reflectance (R), transmittance (T), and optionally absorbed energy,
-    ellipsometric data (psi, delta), and the Poynting vector using the Transfer Matrix Method (TMM). The function is designed 
-    for advanced simulations involving multilayer thin films, accommodating various material properties, polarization states,
-    and conditions (e.g., incoherent layers).
-
-    This function is intended to be used within another function, hence the underscore prefix, and it is optimized for JAX,
-    enabling high-performance, differentiable computations. The function is versatile, supporting both scalar and array 
-    inputs for the angle of incidence (theta) and wavelength of light.
-
-    Args:
-        stack (Stack): An object representing the multilayer thin film stack. This class includes the necessary methods 
-                       and properties for material properties, layer thicknesses, and the handling of coherent and incoherent 
-                       layers.
-        polarization (Optional[Union[str, bool]]): The polarization state of the incident light. 's' denotes s-polarization, 
-                                                  'p' denotes p-polarization, and None indicates unpolarized light.
-        theta_index (Union[float, jnp.ndarray]): The index of angle of incidence (in radians) at which light strikes the multilayer thin 
-                                           film. This can be a single int value or a jnp array for angle-dependent 
-                                           computations.
-        wavelength_index (Union[float, jnp.ndarray]): The index of wavelength(s) of the incident light. This can be a single int value 
-                                                or a jnp array to compute properties over a range of wavelengths.
-
-    Returns:
-        Union[Tuple[jnp.ndarray, jnp.ndarray], 
-              Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], 
-              Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray], 
-              Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
-              Depending on the state of the Stack object's flags, the function returns a tuple containing arrays of 
-              reflectance (R), transmittance (T), and optionally absorbed energy, ellipsometric data (psi, delta), 
-              and the Poynting vector.
-    """
-    # Helper function to calculate reflectance (R) and transmittance (T)
-    def calculate_rt():
-        """
-        This helper function computes the reflection and transmission coefficients, denoted as R and T, for the multilayer 
-        thin film. The calculation is performed using the Transfer Matrix Method (TMM), which involves constructing 
-        characteristic matrices for each layer, considering the angle of incidence, wavelength, and polarization of the light.
-        """
-        layer_phases = stack.kz[theta_index, wavelength_index, :] * stack.thicknesses
-        _phases_ts_rs = _create_phases_ts_rs(stack.rt[theta_index, wavelength_index, :], layer_phases, light.polarization)
-        _tr_matrix = _cascaded_matrix_multiplication(_phases_ts_rs)
-        R = _tr_matrix[1,0] / _tr_matrix[0,0]
-        T = 1 / _tr_matrix[0,0]
-        return R, T
-
-    # Helper function to calculate absorbed energy
-    def calculate_absorbed_energy(stack, r, t):
-        """
-        This helper function calculates the absorbed energy within the multilayer thin film structure. The calculation is 
-        dependent on the complex reflection (r) and transmission (t) coefficients, which provide information about how much 
-        energy is absorbed within each layer.
-        """
-        # Perform calculations based on r and t to determine absorbed energy
-        # ...
-        return absorbed_energy
-
-    # Helper function to calculate ellipsometric data (psi, delta)
-    def calculate_ellipsometric_data(stack, r, t):
-        """
-        This helper function computes the ellipsometric parameters psi and delta, which describe the change in polarization 
-        state as light reflects off the multilayer thin film. The calculations are based on the complex reflection coefficients 
-        (r) for different polarizations.
-        """
-        # Calculate psi and delta from r and t for coherent layers
-        # ...
-        return psi, delta
-
-    # Helper function to calculate the Poynting vector
-    def calculate_poynting_vector(stack, r, t):
-        """
-        The Poynting vector represents the directional energy flux (the rate of energy transfer per unit area) of the 
-        electromagnetic wave. This helper function calculates the Poynting vector based on the complex transmission coefficient 
-        (t) and the structure of the multilayer thin film.
-        """
-        # Calculate the Poynting vector based on t
-        # ...
-        return poynting_vector
-
-    R, T = calculate_rt()
-    results = [R, T]
+    # Compute the angles of light propagation within each layer based on Snell's Law
+    # and the input angle of incidence.
+    layer_angles = compute_layer_angles(angle_of_incidence, nk_list, polarization)
     
-    if not stack.any_incoherent:
+    # Compute the z-component of the wavevector (kz) in each layer, which is wavelength-dependent.
+    kz = compute_kz(nk_list, layer_angles, wavelength)
+    
+    # Compute the phase change in each layer due to the thickness of the layer.
+    # Excludes the incoming and outgoing media (index 0 and -1).
+    layer_phases = jnp.multiply(kz.at[1:-1].get(), thickness_list)
 
-        if stack.obs_absorbed_energy:
-            absorbed_energy = calculate_absorbed_energy(stack, R, T)
-            results.append(absorbed_energy)
+    # Calculate reflection and transmission coefficients at each layer interface.
+    # Excludes the incoming and outgoing media.
+    rt = jnp.squeeze(compute_rt(nk_list = nk_list, angles = layer_angles, polarization = polarization))
 
-        if stack.obs_ellipsiometric:
-            psi, delta = calculate_ellipsometric_data(stack, R, T)
-            results.append([psi, delta])
+    # Multiply transfer matrices for all internal layers to compute the combined matrix.
+    # This represents the cumulative effect of reflections and transmissions.
+    tr_matrix = coh_cascaded_matrix_multiplication(phases = layer_phases, rts = rt.at[1:,:].get())
 
-        if stack.obs_poynting:
-            poynting_vector = calculate_poynting_vector(stack, R, T)
-            results.append(poynting_vector)
+    # Incorporate the reflection and transmission coefficients of the incoming medium
+    # into the total transfer matrix.
+    tr_matrix = jnp.multiply(jnp.true_divide(1, rt.at[0,1].get()), jnp.dot(jnp.array([[1, rt.at[0,0].get()], [rt.at[0,0].get(), 1]]), tr_matrix))
 
-        return tuple(results)
+    # Compute the first layer matrix for the incoming medium
+    first_layer_matrix = compute_first_layer_matrix_coherent(r = rt.at[0,0].get(),
+                                                             t = rt.at[0,1].get())
+    # Multiply the first layer matrix with the transfer matrix
+    tr_matrix = jnp.matmul(first_layer_matrix, tr_matrix)
+
+    # Extract the complex reflectance coefficient (r) from the total transfer matrix.
+    r = jnp.true_divide(tr_matrix.at[1,0].get(), tr_matrix.at[0,0].get())
+
+    # Extract the complex transmittance coefficient (t) from the total transfer matrix.
+    t = jnp.true_divide(1, tr_matrix.at[0,0].get())
+
+    # Compute the reflectance (R) from the reflectance coefficient.
+    R = calculate_reflectance_from_coeff(r)
+
+    # Compute the transmittance (T) from the transmittance coefficient, accounting for
+    # impedance matching and angle-dependent factors in the incoming and outgoing media.
+    T = calculate_transmittace_from_coeff(t, nk_list.at[0].get(), angle_of_incidence, nk_list.at[-1].get(), layer_angles.at[-1].get(), polarization) #calculate T
+    
+    # Return the computed reflectance and transmittance values as the output.
+    return R, T
 
 
-def forward(stack: Stack, light: Light) -> Union[
-        jnp.ndarray, 
-        tuple[jnp.ndarray, jnp.ndarray], 
-        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], 
-        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray], 
-        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
+def tmm_incoh_single_wl_angle_point(data: ArrayLike,
+                                    material_distribution: ArrayLike,
+                                    thickness_list: ArrayLike,
+                                    coherent_layer_indices_forward: ArrayLike,
+                                    incoherent_layer_indices_forward: ArrayLike,
+                                    coherency_indices_forward: ArrayLike,
+                                    coherent_layer_indices_backward: ArrayLike,
+                                    coherency_indices_backward: ArrayLike,
+                                    wavelength: ArrayLike,
+                                    angle_of_incidence: ArrayLike,
+                                    polarization: ArrayLike) -> Array:
     """
-    The `forward` function applies the Transfer Matrix Method (TMM) over a range of wavelengths and angles of incidence (theta)
-    by leveraging the JAX `vmap` function for vectorized computation. It is designed to handle multilayer thin film simulations
-    efficiently, processing the entire spectrum and angular range of interest in one go.
+    This function implements the Transfer Matrix Method (TMM) to compute the reflectance (R) 
+    and transmittance (T) of a incoherent multilayer thin-film structure for a given wavelength, 
+    angle of incidence, and polarization.
 
-    This function is highly optimized for performance and uses advanced Python techniques to ensure the calculations are both
-    efficient and scalable. It does not include JIT compilation, as this might be applied externally.
+    Arguments:
+    ----------
+    data: ArrayLike
+        A 2D array where each row corresponds to the refractive index (n) and extinction 
+        coefficient (k) data of a specific material. The first axis length is the number of 
+        materials, and the second axis is the length of the nk vs wavelength data for each 
+        material.
 
-    Args:
-        _stack (Stack): The `Stack` object representing the multilayer thin film configuration. It includes material properties,
-                       layer thicknesses, and options for incoherent layer handling.
-        _light (Light): The `Light` object containing the properties of the incident light, including wavelength, angle of 
-                      incidence (theta), and polarization.
+    material_distribution: ArrayLike
+        An array of integers specifying the material index for each layer in the multilayer 
+        structure, including the incoming and outgoing medium. Its length is N + 2, where 
+        N is the number of thin-film layers.
+
+    thickness_list: ArrayLike
+        A 1D array of floats representing the physical thickness of each thin-film layer. 
+        Its length is N, corresponding to the N layers in the multilayer structure.
+
+    coherent_layer_indices_forward: ArrayLike
+        Indices of coherent layers for forward propagation.
+
+    incoherent_layer_indices_forward: ArrayLike
+        Indices of incoherent layers for forward propagation.
+
+    coherency_indices_forward: ArrayLike
+        Indices defining coherency conditions in forward direction.
+
+    coherent_layer_indices_backward: ArrayLike
+        Indices of coherent layers for backward propagation.
+
+    coherency_indices_backward: ArrayLike
+        Indices defining coherency conditions in backward direction.
+
+    wavelength: ArrayLike
+        The wavelength of the light wave (in the same units as the nk data). This is used 
+        to calculate the optical properties for the specific wavelength.
+
+    angle_of_incidence: ArrayLike
+        The angle (in radians) of the incoming light with respect to the normal of the 
+        multilayer thin-film surface.
+
+    polarization: ArrayLike
+        Specifies the polarization state of the light wave. If `False`, the light is 
+        s-polarized (E field is perpendicular to the plane of incidence), and if `True`, 
+        it is p-polarized (E field is parallel to the plane of incidence).
 
     Returns:
-        Union[jnp.ndarray, 
-              tuple[jnp.ndarray, jnp.ndarray], 
-              tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], 
-              tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray], 
-              tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
-              The output of the `_tmm` function, vectorized over the provided range of wavelengths and angles.
-              Depending on the configuration of the `Stack` object, it may return:
-              - Reflectance (R) and Transmittance (T) as `jnp.ndarray`
-              - Optionally, absorbed energy, ellipsometric data (psi, delta), and the Poynting vector.
+    --------
+    Tuple of two scalars:
+        R: Reflectance (a value between 0 and 1, representing the ratio of reflected power 
+           to incident power).
+        T: Transmittance (a value between 0 and 1, representing the ratio of transmitted 
+           power to incident power).
     """
 
-    # Extract polarization, theta, and wavelength from the Light object
-    _polarization = light.polarization  # 's', 'p', or None (unpolarized)
-    _theta_indices = jnp.arange(0,len(light.angle_of_incidence), dtype = int) # Array or single value for the indices of angle of incidence
-    _wavelength_indices = jnp.arange(0,len(light.wavelength), dtype = int) # Array or single value for  the indices of wavelength
+    # Create a list of refractive indices and extinction coefficients for each layer 
+    # at the given wavelength using the provided material distribution.
+    nk_list = create_nk_list(material_distribution, data, wavelength)
+    
+    # Compute the angles of light propagation within each layer based on Snell's Law
+    # and the input angle of incidence.
+    layer_angles = compute_layer_angles(angle_of_incidence, nk_list, polarization)
+    
+    # Compute the z-component of the wavevector (kz) in each layer, which is wavelength-dependent.
+    kz = compute_kz(nk_list, layer_angles, wavelength)
+    
+    # Compute the phase change in each layer due to the thickness of the layer.
+    # Excludes the incoming and outgoing media (index 0 and -1).
+    layer_phases = jnp.multiply(kz.at[1:-1].get(), thickness_list)
 
-    # Vectorize the _tmm function across theta and wavelength using JAX's vmap
-    _tmm_vectorized = vmap(vmap(_tmm, (None, None, 0, None)), (None, None, None, 0)) # Fix _stack and _polarization, vmap _theta_indices and _wavelength_indices
+    # Compute reflection and transmission coefficients at each interface
+    rt_forward = jnp.squeeze(compute_rt(nk_list = nk_list, angles = layer_angles, polarization = polarization))
+    rt_backward = jnp.squeeze(compute_rt(nk_list = jnp.flip(nk_list), angles = jnp.flip(layer_angles), polarization = polarization))
 
-    # Apply the vectorized function to the theta and wavelength arrays
-    _result = _tmm_vectorized(stack, light, _theta_indices, _wavelength_indices)
+    # Compute magnitudes of reflection and transmission coefficients for forward propagation (not good for jit! update this func asap)
+    forward_magnitudes = compute_r_t_magnitudes_incoh(coherent_layer_indices = coherent_layer_indices_forward,
+                                                      coherency_indices = coherency_indices_forward,
+                                                      rts = rt_forward,
+                                                      layer_phases = layer_phases,
+                                                      nk_list = nk_list,
+                                                      layer_angles = layer_angles,
+                                                      polarization = polarization)
+    
+    # Compute magnitudes of reflection and transmission coefficients for backward propagation (not good for jit! update this func asap)
+    backward_magnitudes = compute_r_t_magnitudes_incoh(coherent_layer_indices = coherent_layer_indices_backward,
+                                                       coherency_indices = coherency_indices_backward,
+                                                       rts = rt_backward,
+                                                       layer_phases = jnp.flip(layer_phases),
+                                                       nk_list = jnp.flip(nk_list),
+                                                       layer_angles = jnp.flip(layer_angles),
+                                                       polarization = polarization)
 
-    # Return the result
-    return _result
+    # Flip backward magnitudes to align with the correct propagation direction
+    backward_magnitudes = jnp.flip(backward_magnitudes, axis=0)
+
+    # Compute incoherent layer pass contributions
+    layer_passes = compute_inc_layer_pass(incoherent_layer_indices_forward.at[1:-1].get(), layer_phases)
+
+    # Compute the transfer matrix for the entire multilayer structure
+    tr_matrix = incoh_cascaded_matrix_multiplication(forward_magnitudes = forward_magnitudes.at[1:,:].get(),
+                                                     backward_magnitudes = backward_magnitudes.at[1:,:].get(),
+                                                     layer_passes = layer_passes)
+
+    # Compute the first layer matrix for the incoming medium
+    first_layer_matrix = compute_first_layer_matrix_incoherent(r_forward = forward_magnitudes.at[0,0].get(),
+                                                               t_forward = forward_magnitudes.at[0,1].get(),
+                                                               r_backward = backward_magnitudes.at[0,0].get(),
+                                                               t_backward = backward_magnitudes.at[0,1].get())
+
+    # Multiply the first layer matrix with the transfer matrix
+    tr_matrix = jnp.matmul(first_layer_matrix, tr_matrix)
+
+    # Compute reflectance (R) and transmittance (T) from the transfer matrix elements
+    R = jnp.true_divide(tr_matrix.at[1,0].get(), tr_matrix.at[0,0].get())
+    T = jnp.true_divide(1, tr_matrix.at[0,0].get())
+
+    # Return computed reflectance and transmittance
+    return R, T
+
+@jit
+def tmm_coh_single_wl_angle_point_jit(data: ArrayLike,
+                                      material_distribution: ArrayLike,
+                                      thickness_list: ArrayLike,
+                                      wavelength: ArrayLike,
+                                      angle_of_incidence: ArrayLike,
+                                      polarization: ArrayLike) -> Array:
+    """
+    This function implements the JIT-ed version of Transfer Matrix Method (TMM) to 
+    compute the reflectance (R) and transmittance (T) of a coherent multilayer thin-film 
+    structure for a given wavelength, angle of incidence, and polarization.
+
+    Arguments:
+    ----------
+    data: ArrayLike
+        A 2D array where each row corresponds to the refractive index (n) and extinction 
+        coefficient (k) data of a specific material. The first axis length is the number of 
+        materials, and the second axis is the length of the nk vs wavelength data for each 
+        material.
+
+    material_distribution: ArrayLike
+        An array of integers specifying the material index for each layer in the multilayer 
+        structure, including the incoming and outgoing medium. Its length is N + 2, where 
+        N is the number of thin-film layers.
+
+    thickness_list: ArrayLike
+        A 1D array of floats representing the physical thickness of each thin-film layer. 
+        Its length is N, corresponding to the N layers in the multilayer structure.
+
+    wavelength: ArrayLike
+        The wavelength of the light wave (in the same units as the nk data). This is used 
+        to calculate the optical properties for the specific wavelength.
+
+    angle_of_incidence: ArrayLike
+        The angle (in radians) of the incoming light with respect to the normal of the 
+        multilayer thin-film surface.
+
+    polarization: ArrayLike
+        Specifies the polarization state of the light wave. If `False`, the light is 
+        s-polarized (E field is perpendicular to the plane of incidence), and if `True`, 
+        it is p-polarized (E field is parallel to the plane of incidence).
+
+    Returns:
+    --------
+    Tuple of two scalars:
+        R: Reflectance (a value between 0 and 1, representing the ratio of reflected power 
+           to incident power).
+        T: Transmittance (a value between 0 and 1, representing the ratio of transmitted 
+           power to incident power).
+    """
+
+    # Create a list of refractive indices and extinction coefficients for each layer 
+    # at the given wavelength using the provided material distribution.
+    nk_list = create_nk_list(material_distribution, data, wavelength)
+    
+    # Compute the angles of light propagation within each layer based on Snell's Law
+    # and the input angle of incidence.
+    layer_angles = compute_layer_angles(angle_of_incidence, nk_list, polarization)
+    
+    # Compute the z-component of the wavevector (kz) in each layer, which is wavelength-dependent.
+    kz = compute_kz(nk_list, layer_angles, wavelength)
+    
+    # Compute the phase change in each layer due to the thickness of the layer.
+    # Excludes the incoming and outgoing media (index 0 and -1).
+    layer_phases = jnp.multiply(kz.at[1:-1].get(), thickness_list)
+
+    # Calculate reflection and transmission coefficients at each layer interface.
+    # Excludes the incoming and outgoing media.
+    rt = jnp.squeeze(compute_rt(nk_list = nk_list, angles = layer_angles, polarization = polarization))
+
+    # Multiply transfer matrices for all internal layers to compute the combined matrix.
+    # This represents the cumulative effect of reflections and transmissions.
+    tr_matrix = coh_cascaded_matrix_multiplication(phases = layer_phases, rts = rt.at[1:,:].get())
+
+    # Incorporate the reflection and transmission coefficients of the incoming medium
+    # into the total transfer matrix.
+    tr_matrix = jnp.multiply(jnp.true_divide(1, rt.at[0,1].get()), jnp.dot(jnp.array([[1, rt.at[0,0].get()], [rt.at[0,0].get(), 1]]), tr_matrix))
+
+    # Extract the complex reflectance coefficient (r) from the total transfer matrix.
+    r = jnp.true_divide(tr_matrix.at[1,0].get(), tr_matrix.at[0,0].get())
+
+    # Extract the complex transmittance coefficient (t) from the total transfer matrix.
+    t = jnp.true_divide(1, tr_matrix.at[0,0].get())
+
+    # Compute the reflectance (R) from the reflectance coefficient.
+    R = calculate_reflectance_from_coeff(r)
+
+    # Compute the transmittance (T) from the transmittance coefficient, accounting for
+    # impedance matching and angle-dependent factors in the incoming and outgoing media.
+    T = calculate_transmittace_from_coeff(t, nk_list.at[0].get(), angle_of_incidence, nk_list.at[-1].get(), layer_angles.at[-1].get(), polarization) #calculate T
+    
+    # Return the computed reflectance and transmittance values as the output.
+    return R, T
+
+
+def vectorized_coh_tmm(data: ArrayLike, 
+                       material_distribution: ArrayLike, 
+                       thickness_list: ArrayLike, 
+                       wavelengths: ArrayLike, 
+                       angle_of_incidences: ArrayLike, 
+                       polarization) -> Array:
+    """
+    This function is designed to vectorize the Transfer Matrix Method (TMM) calculations 
+    over two axes: wavelength and angle of incidence. The function uses the `jax.vmap` 
+    function to vectorize the `tmm_coh_single_wl_angle_point` function, which performs TMM 
+    calculations for a single combination of wavelength and angle of incidence. The first 
+    `vmap` maps over the wavelength axis, and the second `vmap` maps over the angle of 
+    incidence axis. The other inputs (`data`, `material_distribution`, `thickness_list`, 
+    and `polarization`) remain constant during the vectorized computation.
+
+    Arguments:
+    ----------
+    data: ArrayLike
+        A 2D array where each row corresponds to the refractive index (n) and extinction 
+        coefficient (k) data of a specific material. The first axis length is the number of 
+        materials, and the second axis is the length of the nk vs wavelength dataset for 
+        each material.
+
+    material_distribution: ArrayLike
+        An array of integers specifying the material index for each layer in the multilayer 
+        structure, including the incoming and outgoing medium. Its length is N + 2, where 
+        N is the number of thin-film layers.
+
+    thickness_list: ArrayLike
+        A 1D array of floats representing the physical thickness of each thin-film layer. 
+        Its length is N, corresponding to the N layers in the multilayer structure.
+
+    wavelengths: ArrayLike
+        The wavelengths of the light wave (in the same units as the nk data). This is used 
+        to calculate the optical properties for the specific wavelength.
+
+    angle_of_incidences: ArrayLike
+        The angles (in radians) of the incoming light with respect to the normal of the 
+        multilayer thin-film surface.
+
+    polarization: ArrayLike
+        Specifies the polarization state of the light wave. If `False`, the light is 
+        s-polarized (perpendicular to the plane of incidence), and if `True`, it is 
+        p-polarized (parallel to the plane of incidence).
+
+    Returns:
+    --------
+    result : Array
+        A multi-dimensional array containing the computed results of the TMM calculations 
+        for all specified wavelengths and angles of incidence. The dimensions of this 
+        array correspond to the vectorized axes (wavelength and angle of incidence).
+    """
+
+    # Use `vmap` to vectorize `tmm_coh_single_wl_angle_point` over wavelength and angle of incidence.
+    # The first `vmap` applies vectorization across the angle_of_incidence axis (last dimension of the input array).
+    # The second `vmap` applies vectorization across the wavelength axis (one level up in the input hierarchy).
+    tmm_vmap = vmap(vmap(tmm_coh_single_wl_angle_point, (None, None, None, 0, None, None)), (None, None, None, None, 0, None))
+    
+    # Apply the vectorized function `tmm_vmap` to the input arguments and return the result.
+    # `data`, `material_distribution`, `thickness_list`, and `polarization` remain constant during vectorized computation
+    return tmm_vmap(data, material_distribution, thickness_list, wavelengths, angle_of_incidences, polarization)
+
+
+def vectorized_incoh_tmm(data: ArrayLike,
+                         material_distribution: ArrayLike,
+                         thickness_list: ArrayLike,
+                         coherent_layer_indices_forward: ArrayLike,
+                         incoherent_layer_indices_forward: ArrayLike,
+                         coherency_indices_forward: ArrayLike,
+                         coherent_layer_indices_backward: ArrayLike,
+                         coherency_indices_backward: ArrayLike,
+                         wavelengths: ArrayLike,
+                         angle_of_incidences: ArrayLike,
+                         polarization: ArrayLike):
+    """
+    This function is designed to vectorize the Transfer Matrix Method (TMM) calculations 
+    over two axes: wavelength and angle of incidence. The function uses the `jax.vmap` 
+    function to vectorize the `tmm_coh_single_wl_angle_point` function, which performs TMM 
+    calculations for a single combination of wavelength and angle of incidence. The first 
+    `vmap` maps over the wavelength axis, and the second `vmap` maps over the angle of 
+    incidence axis. The other inputs (`data`, `material_distribution`, `thickness_list`, 
+    and `polarization`) remain constant during the vectorized computation.
+
+    Arguments:
+    ----------
+    data: ArrayLike
+        A 2D array where each row corresponds to the refractive index (n) and extinction 
+        coefficient (k) data of a specific material. The first axis length is the number of 
+        materials, and the second axis is the length of the nk vs wavelength dataset for 
+        each material.
+
+    material_distribution: ArrayLike
+        An array of integers specifying the material index for each layer in the multilayer 
+        structure, including the incoming and outgoing medium. Its length is N + 2, where 
+        N is the number of thin-film layers.
+
+    thickness_list: ArrayLike
+        A 1D array of floats representing the physical thickness of each thin-film layer. 
+        Its length is N, corresponding to the N layers in the multilayer structure.
+        
+    coherent_layer_indices_forward: ArrayLike
+        A 1D array of indices representing the layers that are considered coherent in the 
+        forward direction.
+
+    incoherent_layer_indices_forward: ArrayLike
+        A 1D array of indices representing the layers that are considered incoherent in the 
+        forward direction. 
+
+    coherency_indices_forward: ArrayLike
+        A 1D array of indices specifying the layers where the coherence condition holds in the 
+        forward direction.
+
+    coherent_layer_indices_backward: ArrayLike
+        A 1D array of indices representing the layers that are considered coherent in the backward
+        direction.
+
+    coherency_indices_backward: ArrayLike
+        A 1D array of indices specifying the layers (coh or incoh) where the coherence condition 
+        holds in the backward direction.
+
+    wavelengths: ArrayLike
+        The wavelengths of the light wave (in the same units as the nk data). This is used 
+        to calculate the optical properties for the specific wavelength.
+
+    angle_of_incidences: ArrayLike
+        The angles (in radians) of the incoming light with respect to the normal of the 
+        multilayer thin-film surface.
+
+    polarization: ArrayLike
+        Specifies the polarization state of the light wave. If `False`, the light is 
+        s-polarized (perpendicular to the plane of incidence), and if `True`, it is 
+        p-polarized (parallel to the plane of incidence).
+
+    Returns:
+    --------
+    result : Array
+        A multi-dimensional array containing the computed results of the TMM calculations 
+        for all specified wavelengths and angles of incidence. The dimensions of this 
+        array correspond to the vectorized axes (wavelength and angle of incidence).
+    """
+
+    # Use `vmap` to vectorize `tmm_incoh_single_wl_angle_point` over wavelength and angle of incidence.
+    # The first `vmap` applies vectorization across the angle_of_incidence axis (last dimension of the input array).
+    # The second `vmap` applies vectorization across the wavelength axis (one level up in the input hierarchy).
+    tmm_vmap = vmap(vmap(tmm_incoh_single_wl_angle_point, 
+                         (None, None, None,None, None, None, None, None, 0, None, None)), 
+                         (None, None, None,None, None, None, None, None, None, 0, None))
+    
+    # Apply the vectorized function `tmm_vmap` to the input arguments and return the result.
+    # `data`, `material_distribution`, `thickness_list`, and `polarization` remain constant during vectorized computation
+    return tmm_vmap(data,
+                    material_distribution,
+                    thickness_list,
+                    coherent_layer_indices_forward,
+                    incoherent_layer_indices_forward,
+                    coherency_indices_forward,
+                    coherent_layer_indices_backward,
+                    coherency_indices_backward,
+                    wavelengths,
+                    angle_of_incidences,
+                    polarization)
+
+def tmm_coh(material_list: List[str],
+            thickness_list: ArrayLike,
+            wavelength_arr: ArrayLike,
+            angle_of_incidences: ArrayLike,
+            polarization: Text) -> Tuple[Array, Array]:
+    """
+    Perform the Transfer Matrix Method (TMM) for coherent multilayer thin films.
+
+    Arguments:
+    ----------
+        material_list (List[str]): A list of material names. Each material is identified by a string.
+            Example: ["Air", "TiO2", "SiO2"]. These strings specify the materials in the multilayer thin film structure.
+            The first and last materials in the list are typically assumed to be semi-infinite layers (e.g., Air, SiO2).
+        
+        thickness_list (jnp.ndarray): An array of thicknesses corresponding to the thin-film layers.
+            Each element specifies the physical thickness of one layer. The order matches the materials in `material_list`.
+            The thicknesses should be finite for thin-film layers and can be ignored for the semi-infinite layers.
+
+        wavelength_arr (jnp.ndarray): An array of wavelengths (in micrometers or nanometers) for which the simulation is performed.
+            This array allows users to specify the range of wavelengths for analyzing the optical properties of the multilayer.
+
+        angle_of_incidences (jnp.ndarray): An array of angles of incidence (in degrees) at which the light interacts with the thin film structure.
+            Each value represents a different incident angle, and the function calculates results for all specified angles.
+
+        polarization (Text): The type of polarization of light, either "s" (s-polarization) or "p" (p-polarization).
+            - "s" refers to perpendicular polarization with respect to the plane of incidence.
+            - "p" refers to parallel polarization with respect to the plane of incidence.
+
+    Returns:
+    --------
+        Tuple[jnp.ndarray, jnp.ndarray]: A tuple of two JAX arrays:
+            - The first array contains the reflection for the given configuration.
+            - The second array contains the transmission for the given configuration.
+            These results describe the amount of light transmitted and reflected at each wavelength and angle of incidence.
+    """
+    
+    # Convert the material list into a set and a material distribution array
+    # The material set contains unique materials, and the distribution describes how materials are layered.
+    material_set, material_distribution = material_distribution_to_set(material_list)
+    
+    # Create the required material data, such as refractive index and extinction coefficient, for each material in the set.
+    # This function retrieves optical properties needed for TMM calculations.
+    data = create_data(material_set)
+
+    # Check the polarization input and convert it to a boolean JAX array.
+    if polarization == 's':
+        # For s-polarization, set the boolean flag to `False`.
+        polarization = jnp.array([False], dtype=bool)
+    elif polarization == 'p':
+        # For p-polarization, set the boolean flag to `True`.
+        polarization = jnp.array([True], dtype=bool)
+    else:
+        # Raise an error if the polarization input is invalid.
+        raise TypeError("The polarization can be 's' or 'p', not other parts. Correct it")
+
+    # Apply the vectorized TMM function, which computes transmission and reflection coefficients
+    # over the specified wavelengths and angles of incidence.
+    # The computation leverages JAX for high-performance array operations.
+    result = vectorized_coh_tmm(data, material_distribution, thickness_list, wavelength_arr, angle_of_incidences, polarization)
+
+    # Return the calculated results, which include transmission and reflection coefficients.
+    return result
+
+def tmm(data: ArrayLike,
+        material_distribution: ArrayLike,
+        thickness_list: ArrayLike,
+        wavelength_arr: ArrayLike,
+        angle_of_incidences: ArrayLike,
+        coherency_list: ArrayLike,
+        polarization: ArrayLike) -> Tuple[Array, Array]:
+    """
+    Perform the Transfer Matrix Method (TMM) for multilayer thin films.
+
+    Arguments:
+    ----------
+        data (ArrayLike): A list of material names. Each material is identified by a string.
+        material_distribution (ArrayLike): An array of integers specifying the material index for each layer in the multilayer structure
+        thickness_list (ArrayLike): An array of thicknesses corresponding to each layer.
+        wavelength_arr (ArrayLike): An array of wavelengths over which to perform the simulation.
+        angle_of_incidences (ArrayLike): An array of angles of incidence.
+        coherency_list (ArrayLike): An array that specifies the coherency (whether the layer is coherent or incoherent).
+        polarization (ArrayLike): The type of polarization 0 -> s-polarized, 1 -> p-polarized, 2 -> unpolarized.
+
+
+    Returns:
+    ----------
+        Tuple[ArrayLike, ArrayLike]: A tuple containing two arrays: 
+            - The first array represents the transmission.
+            - The second array represents the reflection.
+    """
+    # Identify coherent and incoherent layer indices for the forward direction.
+    coherent_groups_forward, incoherent_indices_forward, coherency_indices_forward = find_coh_and_incoh_indices(coherency_list)
+    
+    # Identify coherent and incoherent layer indices for the backward direction (reverse of the coherency list).
+    coherent_groups_backward, _, coherency_indices_backward = find_coh_and_incoh_indices(jnp.flip(coherency_list))
+
+    # Check if the multilayer film is fully coherent (i.e., only 2 incoherent layers).
+    if (len(incoherent_indices_forward) == 2):
+        # If the multilayer structure is fully coherent, use the vectorized coherent TMM function.
+        result = vectorized_coh_tmm(data, material_distribution, thickness_list, wavelength_arr, angle_of_incidences, polarization)
+        # Return the result (tuple of transmission and reflection coefficients).
+        return result
+    else:
+        # If the multilayer structure is not fully coherent, use the vectorized incoherent TMM function.
+        result = vectorized_incoh_tmm(data = data,
+                                      material_distribution = material_distribution,
+                                      thickness_list = thickness_list,
+                                      coherent_layer_indices_forward = coherent_groups_forward,
+                                      incoherent_layer_indices_forward = incoherent_indices_forward,
+                                      coherency_indices_forward = coherency_indices_forward,
+                                      coherent_layer_indices_backward = coherent_groups_backward,
+                                      coherency_indices_backward = coherency_indices_backward,
+                                      wavelengths = wavelength_arr,
+                                      angle_of_incidences = angle_of_incidences,
+                                      polarization = polarization)
+        # Return the result (tuple of transmission and reflection coefficients).
+        return result
