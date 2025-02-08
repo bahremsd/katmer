@@ -5,6 +5,8 @@ import optax
 from jaxtyping import Array, Float, Int, PyTree
 from typing import Union
 
+from .stack import Stack, OneUnkMaterialStack_N, OneUnkMaterialStack_NK, OneUnkMaterialSparseStack_N, OneUnkMaterialSparseStack_NK
+
 def optimize_thickness(optimizer, loss_func, stack, target, num_of_iter, save_log = True):
 
     opt_state = optimizer.init(eqx.filter(stack, eqx.is_array))
