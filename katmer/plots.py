@@ -5,20 +5,20 @@ from typing import Union, List, Optional
 import matplotlib.cm as cm
 
 def plot_material_and_thicknesses(
-        _thicknesses: Union[np.ndarray, jnp.ndarray], 
-        _material_distribution: List[str], 
-        _material_set: List[str], 
+        thicknesses: Union[np.ndarray, jnp.ndarray], 
+        material_distribution: List[str], 
+        material_set: List[str], 
         filename: Optional[str] = None) -> None:
     """
     This function creates a plot that visualizes the material distribution and corresponding 
     layer thicknesses in a multilayer thin film structure.
 
     Arguments:
-    _thicknesses : numpy array or jax array 
+    thicknesses : numpy array or jax array 
         The thicknesses of each layer in the structure.
-    _material_distribution : list of strings 
+    material_distribution : list of strings 
         Indicates which material is in each layer.
-    _material_set : list of strings 
+    material_set : list of strings 
         The set of materials that can be used during optimization.
     filename : str or None 
         The name of the file to save the plot. If None, the plot is displayed instead.
@@ -27,12 +27,12 @@ def plot_material_and_thicknesses(
     """
 
     # Determine the color map based on the material set
-    color_map = plt.get_cmap('Set2', len(_material_set))
-    color_dict = {material: color_map(i) for i, material in enumerate(_material_set)}
+    color_map = plt.get_cmap('Set2', len(material_set))
+    color_dict = {material: color_map(i) for i, material in enumerate(material_set)}
 
     # Normalize thicknesses for the plot
-    total_thickness = np.sum(_thicknesses)
-    normalized_thicknesses = _thicknesses / total_thickness
+    total_thickness = np.sum(thicknesses)
+    normalized_thicknesses = thicknesses / total_thickness
 
     # Create the figure and axes
     fig, ax = plt.subplots(figsize=(8, 4))  # More compact figure size
@@ -41,7 +41,7 @@ def plot_material_and_thicknesses(
     y_offset = 0
     
     # Plot each layer
-    for i, (material, thickness) in enumerate(zip(_material_distribution, normalized_thicknesses)):
+    for i, (material, thickness) in enumerate(zip(material_distribution, normalized_thicknesses)):
         ax.bar(0, thickness, bottom=y_offset, color=color_dict[material], edgecolor='black', width=2, label=material)
         y_offset += thickness
 
@@ -51,7 +51,7 @@ def plot_material_and_thicknesses(
 
     # Add the layer thicknesses and material labels
     y_offset = 0  # Reset y_offset for text placement
-    for i, (material, thickness, norm_thickness) in enumerate(zip(_material_distribution, _thicknesses, normalized_thicknesses)):
+    for i, (material, thickness, norm_thickness) in enumerate(zip(material_distribution, thicknesses, normalized_thicknesses)):
         # Check if the normalized thickness is greater than 5% (0.05) before adding text
         if norm_thickness > 0.05:
             mid_y = y_offset + norm_thickness / 2
@@ -88,19 +88,19 @@ def plot_material_and_thicknesses(
         
 
 def plot_layer_distribution(
-    _thicknesses: Union[np.ndarray, jnp.ndarray],
-    _distribution: Union[np.ndarray, jnp.ndarray],
+    thicknesses: Union[np.ndarray, jnp.ndarray],
+    distribution: Union[np.ndarray, jnp.ndarray],
     filename: Optional[str] = None
 ) -> None:
     """
     Plots the distribution of energy or absorption across the layers of a multilayer thin film structure.
 
     Args:
-        _thicknesses (Union[np.ndarray, jnp.ndarray]): An array of layer thicknesses for the multilayer thin film. 
-                                                      The length must match the length of _distribution.
-        _distribution (Union[np.ndarray, jnp.ndarray]): An array of energy or absorption distribution values corresponding
+        thicknesses (Union[np.ndarray, jnp.ndarray]): An array of layer thicknesses for the multilayer thin film. 
+                                                      The length must match the length of distribution.
+        distribution (Union[np.ndarray, jnp.ndarray]): An array of energy or absorption distribution values corresponding
                                                         to each layer in the multilayer thin film. The length must
-                                                        match the length of _thicknesses.
+                                                        match the length of thicknesses.
         filename (Optional[str]): If provided, the plot is saved to this filename with a .png extension. If None, the
                                   plot is displayed but not saved.
 
@@ -109,31 +109,31 @@ def plot_layer_distribution(
     """
 
     # Convert inputs to numpy arrays for compatibility with matplotlib
-    if isinstance(_thicknesses, jnp.ndarray):
-        _thicknesses = np.array(_thicknesses)
-    if isinstance(_distribution, jnp.ndarray):
-        _distribution = np.array(_distribution)
+    if isinstance(thicknesses, jnp.ndarray):
+        thicknesses = np.array(thicknesses)
+    if isinstance(distribution, jnp.ndarray):
+        distribution = np.array(distribution)
     
     # Validate input lengths
-    if len(_thicknesses) != len(_distribution):
-        raise ValueError("The length of _thicknesses and _distribution must be equal.")
+    if len(thicknesses) != len(distribution):
+        raise ValueError("The length of thicknesses and distribution must be equal.")
     
     # Normalize the thicknesses and distribution for plotting
-    norm = plt.Normalize(vmin=_distribution.min(), vmax=_distribution.max())
+    norm = plt.Normalize(vmin=distribution.min(), vmax=distribution.max())
     cmap = cm.get_cmap('hot')  # Use the 'viridis' colormap, can be changed as needed
     
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Calculate cumulative thicknesses for layer plotting
-    cum_thicknesses = np.concatenate(([0], np.cumsum(_thicknesses)))
+    cum_thicknesses = np.concatenate(([0], np.cumsum(thicknesses)))
     
     # Plot each layer with the corresponding color based on the distribution
-    for i in range(len(_thicknesses)):
+    for i in range(len(thicknesses)):
         ax.fill_betweenx(
             [cum_thicknesses[i], cum_thicknesses[i + 1]],
             0, 1, 
-            color=cmap(norm(_distribution[i])),
+            color=cmap(norm(distribution[i])),
             edgecolor='black',  # Black strip around each layer
             linewidth=1        # Width of the black border
         )
