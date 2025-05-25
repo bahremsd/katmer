@@ -25,6 +25,14 @@
 
 ## Introduction
 
+<div align="center">
+  <a href="https://pypi.org/project/katmer/">
+    <img src="https://github.com/bahremsd/katmer/blob/master/docs/images/readme_info.png" alt="katmer">
+  </a>
+</div>
+
+
+
 ## Documentation
 
 ## Usage

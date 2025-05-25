@@ -1,5 +1,5 @@
-cff-version: 1.2.0
-title: Tmmax
+cff-version: 1.0.0
+title: Katmer
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -8,8 +8,11 @@ authors:
   - given-names: Bahrem Serhat
     family-names: Danis
     orcid: 'https://orcid.org/0009-0002-9880-0446'
-repository-code: 'https://github.com/bahremsd/tmmax'
-url: 'https://pypi.org/project/tmmax/'
+  - given-names: Esra
+    family-names: Zayim
+    orcid: 'https://orcid.org/0000-0001-5887-0293'
+repository-code: 'https://github.com/bahremsd/katmer'
+url: 'https://pypi.org/project/katmer/'
 license: MIT
 version: 1.0.0
-date-released: '2025-02-01'
+date-released: '2025-05-05'

@@ -1,2 +1,1 @@
-include katmer/nk_data/csv/*.csv
-include katmer/nk_data/numpy/*.npy
+include katmer/weights/*.eqx

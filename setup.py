@@ -44,6 +44,6 @@ setup(
     },
     include_package_data=True, 
     package_data={
-        'katmer': ['nk_data/csv/*.csv', 'nk_data/numpy/*.npy'],
+        'katmer': ['weights/*.eqx'],
     },
 )
